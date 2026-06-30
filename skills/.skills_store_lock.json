@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "skills": {
+    "pmaster": {
+      "name": "产品经理综合技能（PM Master）",
+      "zip_url": "https://api.skillhub.cn/api/v1/download?slug=pmaster",
+      "source": "community",
+      "version": "1.0.0",
+      "installedAt": "2026-06-12T01:51:23Z"
+    },
+    "codeconductor": {
+      "name": "CodeConductor.ai",
+      "zip_url": "https://api.skillhub.cn/api/v1/download?slug=codeconductor",
+      "source": "community",
+      "version": "1.0.1",
+      "installedAt": "2026-06-12T02:11:48Z"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "weixin-minigame-helper",
+  "displayName": "微信小游戏开发助手 (Generic Skill)",
+  "version": "0.1.21",
+  "description": "微信小游戏 AI 调试、预览、运行、真机预览、上传发布 — 通用 Skill 版本",
+  "type": "skill",
+  "entry": "SKILL.md",
+  "mcp": {
+    "packageName": "@weadmin/weixin-minigame-helper-mcp",
+    "serverKey": "weixin-minigame-helper",
+    "transport": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "--prefer-online",
+      "@weadmin/weixin-minigame-helper-mcp@latest"
+    ]
+  },
+  "scripts": {
+    "checkMcp": "scripts/check-mcp.mjs",
+    "installMcp": "scripts/install-mcp.mjs",
+    "configureMcp": "scripts/configure-mcp.mjs",
+    "verifyMcp": "scripts/verify-mcp.mjs",
+    "openBrowser": "scripts/open-browser.mjs"
+  },
+  "repository": "https://git.woa.com/weadmin/ai-minigame-engine.git",
+  "license": "MIT"
+}
