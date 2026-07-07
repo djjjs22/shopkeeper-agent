@@ -6,9 +6,10 @@
 路由层只处理请求体、依赖声明和响应类型，不直接创建 Repository 或执行图节点。
 """
 
+import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Body, Cookie, Depends
 from starlette.responses import StreamingResponse
 
 from app.api.dependencies import get_query_service
@@ -21,15 +22,31 @@ query_router = APIRouter()
 
 @query_router.post("/api/query")
 async def query_handler(
-    # 请求体参数：FastAPI 会把前端 JSON 自动解析成 QuerySchema
-    query: QuerySchema,
+    # 显式声明 body 来自 HTTP body（避免 FastAPI 把 body 当成 query 参数）
+    body: Annotated[QuerySchema, Body()],
     # 服务依赖：FastAPI 会调用 get_query_service，递归组装它所需的仓储和客户端
     query_service: Annotated[QueryService, Depends(get_query_service)],
+    # 会话 ID 走 cookie，没有就生成新的
+    session_id: Annotated[str | None, Cookie()] = None,
 ):
     """接收用户自然语言问题，并流式返回 LangGraph 工作流输出"""
 
-    return StreamingResponse(
-        # query.query 是用户问题字符串；QueryService.query 返回异步生成器供响应逐段消费
-        query_service.query(query.query),
+    # ⭐ 多轮对话支持：没有 session_id 就生成一个
+    is_new_session = False
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        is_new_session = True
+
+    # 生成 StreamingResponse
+    response = StreamingResponse(
+        # 把 session_id 传给 query_service，多轮对话靠它来检索历史
+        query_service.query(body.query, session_id=session_id),
         media_type="text/event-stream",
     )
+
+    # 如果是新会话，把 session_id 写到 cookie 让浏览器下次带上
+    # max_age=86400 = 24小时，单位是秒
+    if is_new_session:
+        response.set_cookie(key="session_id", value=session_id, max_age=86400)
+
+    return response
