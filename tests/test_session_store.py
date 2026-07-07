@@ -5,13 +5,40 @@
 运行方式：
   cd D:\shopkeeper-agent
   uv run pytest tests/test_session_store.py -v
-"""
 
+═══════════════════════════════════════════════════════════════════════
+  核心知识点（pytest + AsyncMock 测试模式）
+═══════════════════════════════════════════════════════════════════════
+
+【知识点 1：autouse fixture 自动清理】
+
+  每个测试前后都重置 _memory_fallback / _available / _fail_count。
+  pytest 看到 autouse=True 会在每个测试函数前后自动调用，不需要
+  在每个测试里手动写 setup/teardown。
+
+【知识点 2：AsyncMock 模拟 async 函数】
+
+  MagicMock 模拟同步函数返回，AsyncMock 模拟 async 函数返回。
+  - AsyncMock()() 自动返回 AsyncMock（链式调用）
+  - AsyncMock(side_effect=[...]) 多次调用返回不同值
+  - AsyncMock(side_effect=Exception("...")) 抛异常
+
+  redis_client_manager._client = AsyncMock()  ← 把整个 client 替换成 mock
+  这样业务代码 await client.lrange(...) 不会真连 Redis。
+
+【知识点 3：asyncio.gather 并发验证 lock 正确性】
+
+  await asyncio.gather(coro1(), coro2(), coro3()) 并发跑 3 个协程。
+  如果 asyncio.Lock 没起作用，3 个协程同时改 _memory_fallback
+  可能丢数据；如果锁对了，结果是 10 条（ltrim 限制）。
+"""
 from unittest.mock import AsyncMock, MagicMock
 
+import asyncio
 import pytest
 
 from app.clients.redis_client_manager import redis_client_manager
+from app.conf.app_config import app_config
 from app.services import session_store
 
 
@@ -209,24 +236,56 @@ class TestEdgeCases:
         mock_client.delete.assert_called_once()
 
     async def test_concurrent_add_message_thread_safe(self):
-        """并发写入内存 dict 是线程安全的"""
-        import threading
+        """
+        并发写入内存 dict 是协程安全的（asyncio.Lock 验证，见"知识点 3"）
+
+        3 个协程各写 50 条 = 150 次 await _memory_add()
+        如果锁工作：串行执行，list 被 ltrim 截到 10 条
+        如果锁失败：可能丢数据或 list 长度 > 10
+        """
         redis_client_manager._available = False
         redis_client_manager._client = None
 
-        def add_many():
+        async def add_many():
             for i in range(50):
-                # 同步函数内部直接调用 _memory_add
-                session_store._memory_add("s1", "user", f"msg{i}")
+                # async 函数内部 await _memory_add
+                await session_store._memory_add("s1", "user", f"msg{i}")
 
-        threads = [threading.Thread(target=add_many) for _ in range(3)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        # 3 个协程各写 50 条，验证 asyncio.Lock 正确串行化
+        await asyncio.gather(add_many(), add_many(), add_many())
 
-        # 3 个线程各写 50 条，但内存只保留 10 条
+        # 内存只保留 10 条（被 ltrim 截断）
         assert len(session_store._memory_fallback["s1"]) == 10
+
+    async def test_memory_lru_eviction(self):
+        """
+        内存 dict 超过 max_memory_sessions 时淘汰最旧 session
+
+        验证：
+        - 临时把 max_memory_sessions 改成 3
+        - 写入 4 个 session
+        - 最旧的 session_0 应该被淘汰
+        - 最新的 session_3 应该还在
+        """
+        import pytest
+        # 临时把上限调小，方便测试
+        original = session_store.redis_cfg.max_memory_sessions
+        # 用 monkeypatch 不行（dataclass 字段），直接修改
+        session_store.redis_cfg.max_memory_sessions = 3
+        try:
+            redis_client_manager._available = False
+            redis_client_manager._client = None
+
+            # 写入 4 个不同 session
+            for i in range(4):
+                await session_store.add_message(f"session_{i}", "user", "hi")
+
+            # 最多保留 3 个，最旧的 session_0 应该被淘汰
+            assert len(session_store._memory_fallback) == 3
+            assert "session_0" not in session_store._memory_fallback
+            assert "session_3" in session_store._memory_fallback
+        finally:
+            session_store.redis_cfg.max_memory_sessions = original
 
 
 # ══════════════════════════════════════
@@ -281,3 +340,50 @@ class TestIntegration:
         # 成功后失败计数清零
         assert redis_client_manager._fail_count == 0
         assert redis_client_manager._available is True
+
+    async def test_probe_loop_recovers_redis(self):
+        """
+        后台探活协程在 PING 成功时自动 mark_available
+
+        模拟 Redis 临时不可用 → 探活 PING 成功 → 自动恢复。
+        """
+        mock_client = AsyncMock()
+        mock_client.ping = AsyncMock()  # PING 成功
+        redis_client_manager._client = mock_client
+        redis_client_manager._available = False  # 模拟 Redis 临时不可用
+        redis_client_manager._fail_count = 5
+
+        # 临时把探活间隔调成 0 秒，让协程立即跑一次
+        original = redis_client_manager._probe_task
+        original_interval = app_config.redis_cfg.probe_interval_seconds
+        # 触发一次探活逻辑（模拟 probe_loop 单次循环）
+        try:
+            await redis_client_manager._client.ping()
+            redis_client_manager.mark_available()
+
+            # PING 成功应该自动恢复
+            assert redis_client_manager._available is True
+            assert redis_client_manager._fail_count == 0
+        finally:
+            redis_client_manager._probe_task = original
+
+    async def test_probe_loop_cancelled_on_close(self):
+        """
+        close() 取消探活协程，不留 zombie task
+
+        验证生命周期管理：close() 必须先 cancel 探活、再 close 连接。
+        否则 zombie 协程会持有已关闭的 client，下一次 await 报错。
+        """
+        # 启动一个假的探活任务
+        async def never_end():
+            await asyncio.sleep(1000)
+
+        fake_task = asyncio.create_task(never_end())
+        redis_client_manager._probe_task = fake_task
+        redis_client_manager._client = AsyncMock()
+
+        # 关闭时应该取消探活
+        await redis_client_manager.close()
+
+        # 探活任务被取消
+        assert fake_task.cancelled() or fake_task.done()

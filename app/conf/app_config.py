@@ -98,6 +98,10 @@ class RedisConfig:
     key_prefix: str
     # 失败重试阈值：连续失败 N 次才标记 Redis 不可用，避免网络抖动误降级
     fail_threshold: int = 3
+    # 内存 dict 降级层的最大 session 数（超过时 LRU 淘汰最旧 session）
+    max_memory_sessions: int = 1000
+    # 后台探活协程的间隔（秒）
+    probe_interval_seconds: int = 30
 
 
 @dataclass

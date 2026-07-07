@@ -50,3 +50,7 @@ redis_cfg:
   default_ttl_seconds: 86400
   key_prefix: "session:"
   fail_threshold: 3
+  # 内存 dict 降级层的最大 session 数（超过时 LRU 淘汰最旧 session）
+  max_memory_sessions: 1000
+  # 后台探活协程的间隔（秒）
+  probe_interval_seconds: 30
