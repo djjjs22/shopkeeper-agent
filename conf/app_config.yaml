@@ -42,3 +42,11 @@ llm:
   model_name: deepseek-v4-pro
   api_key: ${oc.env:LLM_API_KEY}
   base_url: https://opencode.ai/zen/go/v1
+
+redis_cfg:
+  url: ${oc.env:REDIS_URL,redis://127.0.0.1:6379/0}
+  max_connections: 20
+  socket_timeout: 2.0
+  default_ttl_seconds: 86400
+  key_prefix: "session:"
+  fail_threshold: 3

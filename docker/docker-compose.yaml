@@ -61,7 +61,25 @@ services:
     volumes:
       - ./embedding/bge-large-zh-v1.5:/models/bge-large-zh-v1.5
 
+  redis:
+    # 国内网络下 Docker Hub 拉取慢，部署时建议改成阿里云镜像
+    # 例如: registry.cn-hangzhou.aliyuncs.com/library/redis:7-alpine
+    image: redis:7-alpine
+    container_name: shopkeeper-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
 volumes:
   mysql_data:
   es_data:
   qdrant_data:
+  redis_data:

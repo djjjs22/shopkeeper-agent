@@ -17,6 +17,7 @@ from app.clients.mysql_client_manager import (
     meta_mysql_client_manager,
 )
 from app.clients.qdrant_client_manager import qdrant_client_manager
+from app.clients.redis_client_manager import redis_client_manager
 
 
 @asynccontextmanager
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI):
     _safe_init("ES", es_client_manager.init)
     _safe_init("MetaMySQL", meta_mysql_client_manager.init)
     _safe_init("DWMySQL", dw_mysql_client_manager.init)
+    _safe_init("Redis", redis_client_manager.init)
 
     yield
 
@@ -53,3 +55,4 @@ async def lifespan(app: FastAPI):
     await _safe_close("ES", es_client_manager.close)
     await _safe_close("MetaMySQL", meta_mysql_client_manager.close)
     await _safe_close("DWMySQL", dw_mysql_client_manager.close)
+    await _safe_close("Redis", redis_client_manager.close)

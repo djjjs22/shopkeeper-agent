@@ -28,6 +28,17 @@ CREATE TABLE column_info
     table_id    VARCHAR(64) COMMENT '所属表编号'
 );
 
+
+-- 会话冷数据归档表（30 天前的 session 从 Redis 迁移到这里）
+DROP TABLE IF EXISTS session_archive;
+CREATE TABLE session_archive
+(
+    session_id  VARCHAR(64) PRIMARY KEY COMMENT '会话 ID',
+    messages    JSON NOT NULL COMMENT '历史消息列表（JSON 格式）',
+    archived_at DATETIME NOT NULL COMMENT '归档时间',
+    INDEX idx_archived_at (archived_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='会话历史冷数据归档表';
+
 DROP TABLE IF EXISTS metric_info;
 CREATE TABLE metric_info
 (
