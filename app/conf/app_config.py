@@ -88,6 +88,19 @@ class LLMConfig:
 
 
 @dataclass
+class RedisConfig:
+    """Redis 连接与降级配置"""
+
+    url: str
+    max_connections: int
+    socket_timeout: float
+    default_ttl_seconds: int
+    key_prefix: str
+    # 失败重试阈值：连续失败 N 次才标记 Redis 不可用，避免网络抖动误降级
+    fail_threshold: int = 3
+
+
+@dataclass
 class AppConfig:
     """项目级总配置入口"""
 
@@ -98,6 +111,7 @@ class AppConfig:
     embedding: EmbeddingConfig
     es: ESConfig
     llm: LLMConfig
+    redis_cfg: RedisConfig
 
 
 # 从当前文件位置回到项目根目录，再定位到 conf/app_config.yaml
