@@ -61,14 +61,26 @@ class DBInfoState(TypedDict):
 
 
 class DataAgentState(TypedDict):
-    """一次问数链路中的核心状态"""
+    """一次问数链路中的核心状态
 
-    query: str  # 用户输入的查询
+    意图分类和查询改写（刀1）在链路最前面执行：
+      query   — 用户当前问题，纯净的，不含历史对话拼接文本
+      history — 多轮对话历史，单独存储，需要历史的节点自行取用
+      intent  — 意图分类结果：chitchat / metadata_query / data_query
+    """
+
+    # ── 用户输入与对话上下文 ──
+    query: str  # 用户当前问题，只放原始输入，不再被 build_prompt 拼接污染
+    history: list  # 多轮对话历史 [{"role": ..., "content": ...}]，需要历史的节点自己从 state 取
+    intent: str  # 意图分类结果，控制 graph 条件边路由
+
+    # ── 召回阶段 ──
     keywords: list[str]  # 抽取的关键词
     retrieved_column_infos: list[ColumnInfo]  # 检索到的字段信息
     retrieved_metric_infos: list[MetricInfo]  # 检索到的指标信息
     retrieved_value_infos: list[ValueInfo]  # 检索到的取值信息
 
+    # ── 过滤与生成阶段 ──
     table_infos: list[TableInfoState]  # 合并和补齐后的表结构上下文
     metric_infos: list[MetricInfoState]  # 合并后的指标上下文
     date_info: DateInfoState  # 当前日期 星期和季度信息

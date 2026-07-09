@@ -5,10 +5,13 @@
 创建初始 State、组装 Runtime Context、消费 graph.astream 的流式输出，
 并统一包装成 SSE 文本返回给路由层。
 
-会话记忆集成（L1+L3）：
-  在 query() 入口取出该 session_id 的历史对话，
-  在生成 SQL 的 Prompt 里带上历史（解决多轮对话问题），
-  执行完成后把本轮对话回写到 session_store。
+会话记忆集成（重构后）：
+  history 和 query 在 state 里分开存储（刀5 修复上下文污染）：
+    - state["query"]   只放用户当前问题，纯净的，不含历史拼接文本
+    - state["history"] 单独存历史对话，需要历史的节点（classify_intent、
+                       rewrite_query、generate_sql）自己从 state 取
+  不再用 build_prompt 把历史拼进 query —— 那会让 jieba 分词和 LLM
+  扩展被历史话题污染（详见 RFC 刀5）。
 """
 
 import json
@@ -23,10 +26,7 @@ from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
 from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
 from app.repositories.qdrant.column_qdrant_repository import ColumnQdrantRepository
 from app.repositories.qdrant.metric_qdrant_repository import MetricQdrantRepository
-from app.services.prompt_builder import build_prompt
-# build_prompt = 把历史对话 + 当前问题 拼成结构化 Prompt 的工具
 from app.services.session_store import add_message, get_history
-# get_history = 拿某 session 的历史；add_message = 把本轮对话存进去
 
 
 class QueryService:
@@ -59,17 +59,13 @@ class QueryService:
             session_id: 会话 ID（用于多轮对话记忆）
         """
 
-        # ⭐ L1 检索：拿历史对话
-        history = get_history(session_id, max_count=3)
-        # 只取最近 3 轮，太多会撑爆 token
+        # 拿历史对话，只取最近 3 轮，太多会撑爆 token
+        history = await get_history(session_id, max_count=3)
 
-        # ⭐ L3 拼接：把历史 + 当前问题 拼成结构化 Prompt
-        enhanced_query = build_prompt(query, history)
-        # 把 enhanced_query 作为新的 query 传给 State
-        # LLM 看到的不只是当前问题，还有"前面聊的是什么"
-
-        # State 只放会被图节点读写和合并的业务数据，外部工具对象不塞进 State
-        state = DataAgentState(query=enhanced_query)
+        # history 和 query 在 state 里分开存储（刀5 修复上下文污染）
+        # state["query"] 只放纯净的当前问题，不再被 build_prompt 拼接
+        # state["history"] 单独存历史，需要历史的节点自己取
+        state = DataAgentState(query=query, history=history)
         # Context 保存本次图执行需要复用的外部依赖，节点通过 runtime.context 读取
         context = DataAgentContext(
             column_qdrant_repository=self.column_qdrant_repository,
@@ -96,11 +92,11 @@ class QueryService:
             # ⭐ L1 存：把本轮对话写回 session_store
             # 只有成功拿到结果才记录（失败的不污染历史）
             if last_result is not None:
-                add_message(session_id, "user", query)
+                await add_message(session_id, "user", query)
                 # 注意：这里存的是用户原始 query，不是 enhanced_query
                 # 否则历史里全是"【对话历史】...【任务类型】..."这种元数据
                 result_text = str(last_result)[:200]  # 截断防止存太大
-                add_message(session_id, "assistant", result_text)
+                await add_message(session_id, "assistant", result_text)
 
         except Exception as e:
             # 流式接口已经开始返回后不能再改 HTTP 状态码，因此把异常也包装成一条 SSE 消息

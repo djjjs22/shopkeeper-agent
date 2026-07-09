@@ -85,3 +85,30 @@ class MetaMySQLRepository:
         result = await self.session.execute(text(sql), {"table_id": table_id})
         # mappings() 会把结果行转成类似字典的结构，便于解包成 ColumnInfo
         return [ColumnInfo(**dict(row)) for row in result.mappings().fetchall()]
+
+    async def get_all_table_infos(self) -> list[TableInfo]:
+        """查询所有表元数据，供元数据查询短路节点（respond_metadata）使用"""
+        result = await self.session.execute(text("select * from table_info"))
+        return [TableInfo(**dict(row)) for row in result.mappings().fetchall()]
+
+    async def get_columns_by_table_id(self, table_id: str) -> list[ColumnInfo]:
+        """查询指定表的所有字段，供元数据查询短路节点使用"""
+        sql = "select * from column_info where table_id = :table_id"
+        result = await self.session.execute(text(sql), {"table_id": table_id})
+        return [ColumnInfo(**dict(row)) for row in result.mappings().fetchall()]
+
+    async def get_all_metric_infos(self) -> list[MetricInfo]:
+        """查询所有指标元数据，供元数据查询短路节点使用"""
+        result = await self.session.execute(text("select * from metric_info"))
+        rows = result.mappings().fetchall()
+        entities = []
+        for row in rows:
+            d = dict(row)
+            # relevant_columns 和 alias 在 MySQL 里以 JSON 字符串存储，需解析为 list
+            import json
+            if isinstance(d.get("relevant_columns"), str):
+                d["relevant_columns"] = json.loads(d["relevant_columns"])
+            if isinstance(d.get("alias"), str):
+                d["alias"] = json.loads(d["alias"])
+            entities.append(MetricInfo(**d))
+        return entities

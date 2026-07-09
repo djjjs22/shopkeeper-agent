@@ -59,3 +59,9 @@ Thumbs.db
 
 # Local TEI embedding model files (large)
 docker/embedding/
+
+# WorkBuddy agent data (local only)
+.workbuddy/
+
+# Runtime logs
+logs/

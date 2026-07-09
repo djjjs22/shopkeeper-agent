@@ -2,9 +2,21 @@
 电商问数 Agent 图编排
 
 使用 LangGraph 把问数智能体的各个节点串成一条可观测的执行链路
-当前链路已经落地关键词抽取和多路召回，字段和指标走 Qdrant 向量检索，字段取值走 ES 全文检索
-整体流程先抽取用户问题关键词，再并行召回字段 字段取值和指标信息，
-随后合并召回结果 过滤候选表和指标 补充额外上下文，最后生成 校验 修正并执行 SQL
+
+链路结构（刀1 加了意图分类 + 查询改写前置）：
+
+  START → classify_intent
+        ├─(chitchat)──────────────→ respond_chitchat → END
+        ├─(metadata_query)────────→ respond_metadata → END
+        └─(data_query)────────────→ rewrite_query → extract_keywords
+                                      → recall_column / recall_value / recall_metric（并行）
+                                      → merge_retrieved_info
+                                      → filter_table / filter_metric（并行）
+                                      → add_extra_context
+                                      → generate_sql → validate_sql
+                                      → (correct_sql →) run_sql → END
+
+意图分类让闲聊和元数据查询短路，只有真正的数据查询才走完整 RAG 链路。
 """
 
 import asyncio
@@ -14,6 +26,7 @@ from langgraph.graph import StateGraph
 
 from app.agent.context import DataAgentContext
 from app.agent.nodes.add_extra_context import add_extra_context
+from app.agent.nodes.classify_intent import classify_intent
 from app.agent.nodes.correct_sql import correct_sql
 from app.agent.nodes.extract_keywords import extract_keywords
 from app.agent.nodes.filter_metric import filter_metric
@@ -23,6 +36,9 @@ from app.agent.nodes.merge_retrieved_info import merge_retrieved_info
 from app.agent.nodes.recall_column import recall_column
 from app.agent.nodes.recall_metric import recall_metric
 from app.agent.nodes.recall_value import recall_value
+from app.agent.nodes.respond_chitchat import respond_chitchat
+from app.agent.nodes.respond_metadata import respond_metadata
+from app.agent.nodes.rewrite_query import rewrite_query
 from app.agent.nodes.run_sql import run_sql
 from app.agent.nodes.validate_sql import validate_sql
 from app.agent.state import DataAgentState
@@ -43,11 +59,21 @@ from app.repositories.qdrant.metric_qdrant_repository import MetricQdrantReposit
 graph_builder = StateGraph(state_schema=DataAgentState, context_schema=DataAgentContext)
 
 # 注册节点：每个节点负责问数链路中的一个清晰步骤
+
+# ── 意图分类 + 查询改写（刀1）──
+graph_builder.add_node("classify_intent", classify_intent)
+graph_builder.add_node("rewrite_query", rewrite_query)
+graph_builder.add_node("respond_chitchat", respond_chitchat)
+graph_builder.add_node("respond_metadata", respond_metadata)
+
+# ── 召回阶段 ──
 graph_builder.add_node("extract_keywords", extract_keywords)
 graph_builder.add_node("recall_column", recall_column)
 graph_builder.add_node("recall_value", recall_value)
 graph_builder.add_node("recall_metric", recall_metric)
 graph_builder.add_node("merge_retrieved_info", merge_retrieved_info)
+
+# ── 过滤与生成阶段 ──
 graph_builder.add_node("filter_metric", filter_metric)
 graph_builder.add_node("filter_table", filter_table)
 graph_builder.add_node("add_extra_context", add_extra_context)
@@ -56,8 +82,33 @@ graph_builder.add_node("validate_sql", validate_sql)
 graph_builder.add_node("correct_sql", correct_sql)
 graph_builder.add_node("run_sql", run_sql)
 
-# 从用户问题开始，先抽取关键词作为后续检索的基础
-graph_builder.add_edge(START, "extract_keywords")
+# ── 意图路由（刀1核心改动）──
+# 从意图分类开始，根据 intent 分流到三条路径：
+#   chitchat       → 闲聊短路响应 → END
+#   metadata_query → 元数据短路响应 → END
+#   data_query     → 查询改写 → 正常 RAG 链路
+graph_builder.add_edge(START, "classify_intent")
+
+graph_builder.add_conditional_edges(
+    source="classify_intent",
+    path=lambda state: {
+        "chitchat": "respond_chitchat",
+        "metadata_query": "respond_metadata",
+        "data_query": "rewrite_query",
+    }[state["intent"]],
+    path_map={
+        "respond_chitchat": "respond_chitchat",
+        "respond_metadata": "respond_metadata",
+        "rewrite_query": "rewrite_query",
+    },
+)
+
+# 闲聊和元数据短路响应直接结束
+graph_builder.add_edge("respond_chitchat", END)
+graph_builder.add_edge("respond_metadata", END)
+
+# 数据查询走查询改写后进入正常链路
+graph_builder.add_edge("rewrite_query", "extract_keywords")
 
 # 关键词抽取后并行进入三类召回，分别面向字段 字段值和业务指标
 graph_builder.add_edge("extract_keywords", "recall_column")
