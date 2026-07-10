@@ -24,6 +24,23 @@
 7. SELECT 中的聚合字段、计算字段和函数表达式必须使用 AS 指定清晰、稳定的结果列别名，优先使用用户问题中的业务名称或指标名称，避免返回 `SUM(...)` 这类表达式列名。
 8. 输出必须仅包含一条完整 SQL 语句的纯文本，严禁使用```、```sql 等 Markdown代码块或任何格式化符号。
 
+【示例】
+
+示例一：单表聚合 + 时间过滤
+用户查询：今年1月的总销售额是多少？
+SQL：
+SELECT SUM(order_amount) AS 总销售额 FROM fact_order JOIN dim_date ON fact_order.date_id = dim_date.date_id WHERE dim_date.year = 2025 AND dim_date.month = 1
+
+示例二：多表 JOIN + 分组聚合
+用户查询：各商品品类的销售额排名情况是怎样的？
+SQL：
+SELECT dim_product.category AS 商品品类, SUM(fact_order.order_amount) AS 销售额 FROM fact_order JOIN dim_product ON fact_order.product_id = dim_product.product_id GROUP BY dim_product.category ORDER BY 销售额 DESC
+
+示例三：多维度筛选 + 指标口径对齐
+用户查询：华南地区黄金会员的客户在今年Q1的GMV是多少？
+SQL：
+SELECT SUM(fact_order.order_amount) AS GMV FROM fact_order JOIN dim_region ON fact_order.region_id = dim_region.region_id JOIN dim_customer ON fact_order.customer_id = dim_customer.customer_id JOIN dim_date ON fact_order.date_id = dim_date.date_id WHERE dim_region.region_name = '华南' AND dim_customer.member_level = '黄金' AND dim_date.year = 2025 AND dim_date.quarter = 'Q1'
+
 用户查询如下：
 {query}
 

@@ -2,9 +2,15 @@
 指标召回节点
 
 负责根据用户问题从指标向量知识库中召回候选指标
-它帮助 Agent 把“销售额 转化率 客单价”等业务表达映射到已定义指标
+它帮助 Agent 把"销售额 转化率 客单价"等业务表达映射到已定义指标
 实现路径和字段召回类似：关键词扩展 -> Embedding -> Qdrant 相似度检索 -> MetricInfo 去重
+
+性能优化（asyncio.gather 并行化）：
+  原实现：对 N 个关键词串行循环，每个关键词都要 aembed_query -> qdrant.search
+  现实现：用 asyncio.gather 把所有关键词的 Embedding + 检索并行执行
 """
+
+import asyncio
 
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import PromptTemplate
@@ -33,7 +39,7 @@ async def recall_metric(state: DataAgentState, runtime: Runtime[DataAgentContext
         embedding_client = runtime.context["embedding_client"]
         metric_qdrant_repository = runtime.context["metric_qdrant_repository"]
 
-        # 用 LLM 把用户问法扩展成“指标概念”列表，例如“销售总额”可扩展出“GMV”“成交额”
+        # 用 LLM 把用户问法扩展成"指标概念"列表，例如"销售总额"可扩展出"GMV""成交额"
         prompt = PromptTemplate(
             template=load_prompt("extend_keywords_for_metric_recall"),
             input_variables=["query"],
@@ -48,15 +54,23 @@ async def recall_metric(state: DataAgentState, runtime: Runtime[DataAgentContext
         # 通用关键词和指标扩展词都参与召回，提升同义指标的命中率
         keywords = set(keywords + result)
 
+        # ── 性能优化：asyncio.gather 并行化关键词循环 ──
+        async def _search_one_keyword(keyword: str) -> list[MetricInfo]:
+            """单个关键词的 Embedding + Qdrant 检索（并行执行单元）"""
+            embedding = await embedding_client.aembed_query(keyword)
+            return await metric_qdrant_repository.search(embedding)
+
+        # 并行发起所有关键词的检索，return_exceptions=True 防止单个失败导致全崩
+        tasks = [_search_one_keyword(kw) for kw in keywords]
+        all_results = await asyncio.gather(*tasks, return_exceptions=True)
+
         # 用指标 id 做唯一键，避免多个关键词命中同一个指标时重复写入 state
         metric_info_map: dict[str, MetricInfo] = {}
-        for keyword in keywords:
-            # 指标库是向量集合，查询词必须先 Embedding 成 query vector
-            embedding = await embedding_client.aembed_query(keyword)
-            current_metric_infos: list[
-                MetricInfo
-            ] = await metric_qdrant_repository.search(embedding)
-            for metric_info in current_metric_infos:
+        for result_item in all_results:
+            if isinstance(result_item, Exception):
+                logger.warning(f"[recall_metric] 关键词检索失败（跳过）: {result_item}")
+                continue
+            for metric_info in result_item:
                 if metric_info.id not in metric_info_map:
                     metric_info_map[metric_info.id] = metric_info
 
