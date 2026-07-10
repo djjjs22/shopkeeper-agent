@@ -11,11 +11,41 @@
   - "xxx怎么算的" / "xxx指标" → 返回指标定义和依赖字段
 """
 
+import re
+
+import jieba
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
 from app.agent.state import DataAgentState
 from app.core.log import logger
+
+
+def _find_mentioned_names(query: str, names: list[str]) -> list[str]:
+    """从 query 中找出所有明确提及的名称（表名或指标名）
+
+    策略（刀 12）：
+    1. jieba 分词，命中完整 token 的名称优先（最准）
+    2. 未被分词命中的名称（如 dim_xxx），回退到「整词边界」子串匹配：
+       用正则确保名称前后不是字母/数字/下划线，避免 "data" 误命中 "database"
+    3. 收集所有匹配后，剔除被其他匹配名称完整包含的短名称
+       （如 dim_date 被 dim_date_new 包含时，只保留 dim_date_new）
+    4. 支持多名称同时出现（如「dim_product 和 dim_customer 的字段」）
+    """
+    tokens = set(jieba.lcut(query))
+    matched = [name for name in names if name in tokens]
+    # 分词未命中时（dim_xxx 这类 jieba 切不出的名称），用边界子串回退
+    if not matched:
+        for name in names:
+            if re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", query):
+                matched.append(name)
+    # 去子串：剔除被其他匹配名称完整包含的短名称
+    final = [
+        name
+        for name in matched
+        if not any(other != name and name in other for other in matched)
+    ]
+    return final
 
 
 def _is_table_list_query(query: str) -> bool:
@@ -56,61 +86,57 @@ async def respond_metadata(state: DataAgentState, runtime: Runtime[DataAgentCont
             logger.info(f"元数据查询-表列表: {len(result)} 张表")
 
         elif _is_table_schema_query(query):
-            # 查某张表的字段——需要从 query 里提取表名
-            # 简单做法：找 query 里包含 "表" 前面的词组，或直接匹配已知表名
+            # 查某张（或多张）表的字段——从 query 里提取表名
             tables = await meta_mysql_repository.get_all_table_infos()
             table_names = [t.name for t in tables]
 
-            matched_table = None
-            for name in table_names:
-                if name in query:
-                    matched_table = name
-                    break
+            # 刀 12：全匹配 + 去子串 + 多表支持，不再 break 在第一个
+            matched_tables = _find_mentioned_names(query, table_names)
 
-            if matched_table:
-                columns = await meta_mysql_repository.get_columns_by_table_id(matched_table)
-                result = [
-                    {
-                        "字段名": c.name,
-                        "类型": c.type,
-                        "描述": c.description,
-                        "角色": c.role,
-                        "样例": c.examples[:3] if c.examples else [],
-                    }
-                    for c in columns
-                ]
-                logger.info(f"元数据查询-表字段: {matched_table} 有 {len(result)} 个字段")
-            else:
+            if not matched_tables:
                 writer({
                     "type": "warning",
                     "message": f"未找到匹配的表名，请明确指定表名（可用表：{', '.join(table_names)}）",
                 })
+            else:
+                for table_name in matched_tables:
+                    columns = await meta_mysql_repository.get_columns_by_table_id(table_name)
+                    result.extend([
+                        {
+                            "表名": table_name,
+                            "字段名": c.name,
+                            "类型": c.type,
+                            "描述": c.description,
+                            "角色": c.role,
+                            "样例": c.examples[:3] if c.examples else [],
+                        }
+                        for c in columns
+                    ])
+                logger.info(f"元数据查询-表字段: {matched_tables}")
 
         elif _is_metric_definition_query(query):
             # 查指标定义——需要从 query 里提取指标名
             all_metrics = await meta_mysql_repository.get_all_metric_infos()
             metric_names = [m.name for m in all_metrics]
 
-            matched_metric = None
-            for name in metric_names:
-                if name in query:
-                    matched_metric = name
-                    break
+            # 刀 12：全匹配 + 去子串 + 多指标支持
+            matched_metrics = _find_mentioned_names(query, metric_names)
 
-            if matched_metric:
-                metric = next(m for m in all_metrics if m.name == matched_metric)
-                result = [{
-                    "指标名": metric.name,
-                    "描述": metric.description,
-                    "依赖字段": metric.relevant_columns,
-                    "别名": metric.alias,
-                }]
-                logger.info(f"元数据查询-指标定义: {matched_metric}")
-            else:
+            if not matched_metrics:
                 writer({
                     "type": "warning",
                     "message": f"未找到匹配的指标名，请明确指定指标名（可用指标：{', '.join(metric_names)}）",
                 })
+            else:
+                for metric_name in matched_metrics:
+                    metric = next(m for m in all_metrics if m.name == metric_name)
+                    result.append({
+                        "指标名": metric.name,
+                        "描述": metric.description,
+                        "依赖字段": metric.relevant_columns,
+                        "别名": metric.alias,
+                    })
+                logger.info(f"元数据查询-指标定义: {matched_metrics}")
 
         else:
             # 兜底：无法识别具体元数据查询意图

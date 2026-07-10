@@ -22,6 +22,7 @@ from app.agent.context import DataAgentContext
 from app.agent.llm import llm
 from app.agent.state import DataAgentState
 from app.core.log import logger
+from app.core.retry import retry_once
 from app.entities.value_info import ValueInfo
 from app.prompt.prompt_loader import load_prompt
 
@@ -59,8 +60,12 @@ async def recall_value(state: DataAgentState, runtime: Runtime[DataAgentContext]
         # ── 性能优化：asyncio.gather 并行化关键词循环 ──
         # ES 全文检索是 IO 密集型操作，并行化效果显著
         async def _search_one_keyword(keyword: str) -> list[ValueInfo]:
-            """单个关键词的 ES 检索（并行执行单元）"""
-            return await value_es_repository.search(keyword)
+            """单个关键词的 ES 检索（并行执行单元，带 1 次重试）"""
+            # ES 容器重启后首个请求可能 ConnectionError，重试 1 次（刀 13）
+            return await retry_once(
+                lambda: value_es_repository.search(keyword),
+                label=f"recall_value:{keyword}",
+            )
 
         # 并行发起所有关键词的检索，return_exceptions=True 防止单个失败导致全崩
         tasks = [_search_one_keyword(kw) for kw in keywords]

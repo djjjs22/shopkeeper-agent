@@ -17,6 +17,10 @@ llm = init_chat_model(
     api_key=app_config.llm.api_key,
     # 字段扩展、SQL 生成更看重稳定性，所以这里关闭随机发散
     temperature=0,
+    # 防止单次慢调用阻塞整个事件循环（刀 11）
+    request_timeout=app_config.llm.request_timeout,
+    # 防止 LLM 生成超长无关内容（刀 11）
+    max_tokens=app_config.llm.max_tokens,
 )
 
 if __name__ == "__main__":

@@ -5,11 +5,12 @@
 字段校验和 OpenAPI 文档生成交给 Pydantic 与 FastAPI 完成。
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class QuerySchema(BaseModel):
     """`/api/query` 请求体，承载用户输入的自然语言问题"""
 
     # 前端请求体中的 query 字段，例如 {"query": "统计华北地区销售额"}
-    query: str
+    # max_length=500 防止超大 payload 灌进 jieba + LLM（刀 10）
+    query: str = Field(max_length=500, description="用户查询文本")

@@ -23,6 +23,7 @@ from app.agent.context import DataAgentContext
 from app.agent.llm import llm
 from app.agent.state import DataAgentState
 from app.core.log import logger
+from app.core.retry import retry_once
 from app.entities.column_info import ColumnInfo
 from app.prompt.prompt_loader import load_prompt
 
@@ -61,9 +62,13 @@ async def recall_column(state: DataAgentState, runtime: Runtime[DataAgentContext
         # 原实现是串行 for 循环，每个关键词都要等前一个的 Embedding + Qdrant 往返完成
         # 现在用 gather 把所有关键词的 Embedding + 检索并行发起，IO 重叠等待
         async def _search_one_keyword(keyword: str) -> list[ColumnInfo]:
-            """单个关键词的 Embedding + Qdrant 检索（并行执行单元）"""
+            """单个关键词的 Embedding + Qdrant 检索（并行执行单元，带 1 次重试）"""
             embedding = await embedding_client.aembed_query(keyword)
-            return await column_qdrant_repository.search(embedding)
+            # Qdrant 容器重启后首个请求可能 ConnectionError，重试 1 次（刀 13）
+            return await retry_once(
+                lambda: column_qdrant_repository.search(embedding),
+                label=f"recall_column:{keyword}",
+            )
 
         # 并行发起所有关键词的检索，return_exceptions=True 防止单个失败导致全崩
         tasks = [_search_one_keyword(kw) for kw in keywords]

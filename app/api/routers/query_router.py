@@ -15,6 +15,7 @@ from starlette.responses import StreamingResponse
 from app.api.dependencies import get_query_service
 from app.api.schemas.query_schema import QuerySchema
 from app.services.query_service import QueryService
+from app.services.session_store import clear_history
 
 # 当前模块只维护查询相关接口，避免后续所有 API 都挤在 main.py 中
 query_router = APIRouter()
@@ -50,3 +51,19 @@ async def query_handler(
         response.set_cookie(key="session_id", value=session_id, max_age=86400)
 
     return response
+
+
+@query_router.post("/api/clear-session")
+async def clear_session_handler(
+    # 会话 ID 走 cookie，和 /api/query 共用同一套会话标识
+    session_id: Annotated[str | None, Cookie()] = None,
+):
+    """清空当前会话的 Redis 历史，配合前端「新会话」按钮使用（刀 17）
+
+    前端只清本地消息不够——session_id（cookie）不变，后端仍会读取旧历史，
+    导致多轮对话上下文错位。这里显式清掉后端历史，让上下文真正重置。
+    """
+    if not session_id:
+        return {"status": "ok", "cleared": False, "reason": "no_session"}
+    await clear_history(session_id)
+    return {"status": "ok", "cleared": True}

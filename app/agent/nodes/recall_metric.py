@@ -20,6 +20,7 @@ from app.agent.context import DataAgentContext
 from app.agent.llm import llm
 from app.agent.state import DataAgentState
 from app.core.log import logger
+from app.core.retry import retry_once
 from app.entities.metric_info import MetricInfo
 from app.prompt.prompt_loader import load_prompt
 
@@ -56,9 +57,13 @@ async def recall_metric(state: DataAgentState, runtime: Runtime[DataAgentContext
 
         # ── 性能优化：asyncio.gather 并行化关键词循环 ──
         async def _search_one_keyword(keyword: str) -> list[MetricInfo]:
-            """单个关键词的 Embedding + Qdrant 检索（并行执行单元）"""
+            """单个关键词的 Embedding + Qdrant 检索（并行执行单元，带 1 次重试）"""
             embedding = await embedding_client.aembed_query(keyword)
-            return await metric_qdrant_repository.search(embedding)
+            # Qdrant 容器重启后首个请求可能 ConnectionError，重试 1 次（刀 13）
+            return await retry_once(
+                lambda: metric_qdrant_repository.search(embedding),
+                label=f"recall_metric:{keyword}",
+            )
 
         # 并行发起所有关键词的检索，return_exceptions=True 防止单个失败导致全崩
         tasks = [_search_one_keyword(kw) for kw in keywords]

@@ -46,6 +46,15 @@ async def filter_metric(state: DataAgentState, runtime: Runtime[DataAgentContext
                 ),
             }
         )
+        # 防御性校验：LLM 可能输出 null / dict / 非 list 结构
+        # 一旦结构异常，降级为「保留全部候选指标」，避免链路中断（刀 14）
+        if not isinstance(result, list):
+            logger.warning(
+                f"{step}: LLM 返回的指标过滤结果非 list（实际 {type(result)}），降级保留全部候选指标"
+            )
+            writer({"type": "progress", "step": step, "status": "success"})
+            return {"metric_infos": metric_infos}
+
         # 用模型返回的指标名称过滤原始结构，保留描述 依赖字段 别名等完整上下文
         filtered_metric_infos = [
             metric_info for metric_info in metric_infos if metric_info["name"] in result

@@ -57,6 +57,22 @@ export async function streamQuery(query: string, options: QueryOptions) {
   }
 }
 
+/**
+ * 清空当前会话的后端历史（配合「新会话」按钮）
+ * 仅清前端本地消息会导致多轮对话上下文错位——session_id（cookie）不变，
+ * 后端仍会读取旧历史。调用此接口显式清掉后端历史。
+ */
+export async function clearSession() {
+  const response = await fetch(`${API_BASE_URL}/api/clear-session`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(`清空会话失败：HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
 function parseSseChunk(chunk: string): AgentEvent | null {
   const payload = chunk
     .split("\n")

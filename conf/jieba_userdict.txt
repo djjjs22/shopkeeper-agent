@@ -1,0 +1,21 @@
+# jieba 业务自定义词典
+# 格式：词 词频 词性
+# 作用：防止 GMV / dim_product 等业务术语被错误切分为碎片
+GMV 100 nz
+AOV 100 nz
+SKU 100 eng
+ROI 100 eng
+UV 100 eng
+PV 100 eng
+dim_product 100 nz
+dim_customer 100 nz
+dim_region 100 nz
+dim_date 100 nz
+fact_order 100 nz
+客单价 100 n
+成交额 100 n
+成交金额 100 n
+订单量 100 n
+下单量 100 n
+复购率 100 n
+转化率 100 n

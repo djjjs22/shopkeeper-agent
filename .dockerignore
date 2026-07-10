@@ -1,0 +1,30 @@
+# 依赖与缓存
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+
+# 版本控制与 IDE
+.git/
+.idea/
+.obsidian/
+.gitignore
+
+# 运行时日志
+logs/
+*.log
+
+# 密钥：绝不打进镜像，运行时通过 --env-file 或 environment 注入
+.env
+
+# 前端与测试：后端镜像不需要
+frontend/
+tests/
+
+# 文档与压缩包
+docs/
+*.md
+skills.zip
+.editorconfig
+.pre-commit-config.yaml

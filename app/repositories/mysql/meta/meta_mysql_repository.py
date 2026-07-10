@@ -86,6 +86,42 @@ class MetaMySQLRepository:
         # mappings() 会把结果行转成类似字典的结构，便于解包成 ColumnInfo
         return [ColumnInfo(**dict(row)) for row in result.mappings().fetchall()]
 
+    async def get_column_infos_by_ids(self, ids: list[str]) -> list[ColumnInfo]:
+        """按多个字段 id 批量查询，避免合并阶段 N+1 串行查询（刀 15）"""
+
+        if not ids:
+            return []
+        sql = "select * from column_info where id in :ids"
+        # 传入 tuple，SQLAlchemy 会自动展开为 IN 占位符列表
+        result = await self.session.execute(text(sql), {"ids": tuple(ids)})
+        return [ColumnInfo(**dict(row)) for row in result.mappings().fetchall()]
+
+    async def get_table_infos_by_ids(self, ids: list[str]) -> list[TableInfo]:
+        """按多个表 id 批量查询，避免合并阶段 N+1 串行查询（刀 15）"""
+
+        if not ids:
+            return []
+        sql = "select * from table_info where id in :ids"
+        result = await self.session.execute(text(sql), {"ids": tuple(ids)})
+        return [TableInfo(**dict(row)) for row in result.mappings().fetchall()]
+
+    async def get_key_columns_by_table_ids(
+        self, table_ids: list[str]
+    ) -> list[ColumnInfo]:
+        """按多个表 id 批量查询主外键字段，避免 N+1 串行查询（刀 15）
+
+        返回扁平列表，调用方按 column_info.table_id 自行分组。
+        """
+
+        if not table_ids:
+            return []
+        sql = (
+            "select * from column_info where table_id in :table_ids "
+            "and role in ('primary_key','foreign_key')"
+        )
+        result = await self.session.execute(text(sql), {"table_ids": tuple(table_ids)})
+        return [ColumnInfo(**dict(row)) for row in result.mappings().fetchall()]
+
     async def get_all_table_infos(self) -> list[TableInfo]:
         """查询所有表元数据，供元数据查询短路节点（respond_metadata）使用"""
         result = await self.session.execute(text("select * from table_info"))

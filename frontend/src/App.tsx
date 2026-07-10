@@ -15,7 +15,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "./components/Composer";
 import { EmptyState } from "./components/EmptyState";
 import { MessageBubble } from "./components/MessageBubble";
-import { streamQuery } from "./lib/agentApi";
+import { streamQuery, clearSession } from "./lib/agentApi";
 import { cn, summarizeResult } from "./lib/format";
 import type { AgentEvent, ChatMessage, StepState } from "./types/agent";
 
@@ -153,8 +153,14 @@ export default function App() {
     activeController?.abort();
   };
 
-  const clearConversation = () => {
+  const clearConversation = async () => {
     if (isStreaming) return;
+    // 先清后端历史，再清前端本地消息（刀 17）
+    try {
+      await clearSession();
+    } catch {
+      // 后端清空失败不阻塞前端清空，本地先清掉
+    }
     setMessages([]);
     setDraft("");
   };

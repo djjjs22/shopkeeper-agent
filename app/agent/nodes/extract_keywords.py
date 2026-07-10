@@ -5,12 +5,19 @@
 后续字段召回 字段取值召回和指标召回都会基于这些关键词展开
 """
 
+import jieba
 import jieba.analyse
 from langgraph.runtime import Runtime
+from pathlib import Path
 
 from app.agent.context import DataAgentContext
 from app.agent.state import DataAgentState
 from app.core.log import logger
+
+# 业务自定义词典：防止 GMV / dim_product 等术语被错误切分（刀 16）
+_USERDICT_PATH = Path(__file__).parents[3] / "conf" / "jieba_userdict.txt"
+if _USERDICT_PATH.exists():
+    jieba.load_userdict(str(_USERDICT_PATH))
 
 
 async def extract_keywords(state: DataAgentState, runtime: Runtime[DataAgentContext]):
@@ -30,6 +37,8 @@ async def extract_keywords(state: DataAgentState, runtime: Runtime[DataAgentCont
             "ns",  # 地名: 华北、北京、上海
             "nt",  # 机构团体名: 门店、品牌、渠道
             "nz",  # 其他专有名词: SKU、GMV、AOV
+            "m",  # 数词: 3月、第一季度、前5个（刀 16 新增，避免时间/数量词被丢弃）
+            "mq",  # 数量词: 万元、件、台（刀 16 新增）
             "v",  # 动词: 统计、对比、查询
             "vn",  # 名动词: 销售、成交、退款
             "a",  # 形容词: 新增、有效、活跃

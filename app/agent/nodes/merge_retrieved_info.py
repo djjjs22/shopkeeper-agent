@@ -50,32 +50,36 @@ async def merge_retrieved_info(
             for retrieved_column_info in retrieved_column_infos
         }
 
-        # 2. 补齐指标依赖字段
-        # 指标告诉模型“怎么算”，但生成 SQL 还需要知道指标依赖哪些真实字段。
-        # 如果相关字段没有被字段召回命中，就从 Meta MySQL 里按 id 查出来补进上下文。
+        # 2 & 3. 收集需要补齐的字段 id（指标依赖字段 + 字段取值对应的字段）
+        # 一次性批量查询，避免逐个 get_by_id 的 N+1 串行开销（刀 15）
+        missing_column_ids: set[str] = set()
         for retrieved_metric_info in retrieved_metric_infos:
             for relevant_column in retrieved_metric_info.relevant_columns:
                 if relevant_column not in retrieved_column_infos_map:
-                    column_info: ColumnInfo = (
-                        await meta_mysql_repository.get_column_info_by_id(
-                            relevant_column
-                        )
-                    )
-                    retrieved_column_infos_map[relevant_column] = column_info
+                    missing_column_ids.add(relevant_column)
+        for retrieved_value_info in retrieved_value_infos:
+            if retrieved_value_info.column_id not in retrieved_column_infos_map:
+                missing_column_ids.add(retrieved_value_info.column_id)
 
-        # 3. 把字段取值合并回字段 examples
+        if missing_column_ids:
+            extra_column_infos = (
+                await meta_mysql_repository.get_column_infos_by_ids(
+                    list(missing_column_ids)
+                )
+            )
+            for column_info in extra_column_infos:
+                if column_info is not None:
+                    retrieved_column_infos_map[column_info.id] = column_info
+
+        # 把字段取值合并回字段 examples
         # 字段取值召回命中的是 column_id + value，例如 dim_region.region_name.华北。
         # 把真实 value 放进字段 examples，可以帮助模型写出更接近真实数据的 where 条件。
         for retrieved_value_info in retrieved_value_infos:
             value = retrieved_value_info.value
             column_id = retrieved_value_info.column_id
-            if column_id not in retrieved_column_infos_map:
-                column_info: ColumnInfo = (
-                    await meta_mysql_repository.get_column_info_by_id(column_id)
-                )
-                retrieved_column_infos_map[column_id] = column_info
-            if value not in retrieved_column_infos_map[column_id].examples:
-                retrieved_column_infos_map[column_id].examples.append(value)
+            if column_id in retrieved_column_infos_map:
+                if value not in retrieved_column_infos_map[column_id].examples:
+                    retrieved_column_infos_map[column_id].examples.append(value)
 
         # 4. 按表组织字段上下文
         # SQL 生成提示词通常按“表 -> 字段列表”的方式描述结构，
@@ -87,28 +91,46 @@ async def merge_retrieved_info(
                 table_to_columns_map[table_id] = []
             table_to_columns_map[table_id].append(column_info)
 
-        # 5. 补齐主外键字段
+        # 5. 补齐主外键字段（批量查询后按 table_id 分组）
         # 主外键通常不会出现在用户问题里，单靠向量召回容易漏掉；
         # 但多表查询的 Join 路径必须依赖它们，所以每张候选表都要兜底补齐。
-        for table_id in table_to_columns_map.keys():
-            key_columns: list[
-                ColumnInfo
-            ] = await meta_mysql_repository.get_key_columns_by_table_id(table_id)
-            column_ids = [
-                column_info.id for column_info in table_to_columns_map[table_id]
-            ]
-            for key_column in key_columns:
+        all_table_ids = list(table_to_columns_map.keys())
+        key_column_infos = (
+            await meta_mysql_repository.get_key_columns_by_table_ids(all_table_ids)
+            if all_table_ids
+            else []
+        )
+        table_to_key_columns_map: dict[str, list[ColumnInfo]] = {}
+        for key_column in key_column_infos:
+            table_to_key_columns_map.setdefault(key_column.table_id, []).append(
+                key_column
+            )
+
+        for table_id, column_infos in table_to_columns_map.items():
+            column_ids = [column_info.id for column_info in column_infos]
+            for key_column in table_to_key_columns_map.get(table_id, []):
                 if key_column.id not in column_ids:
                     table_to_columns_map[table_id].append(key_column)
 
-        # 6. 生成表结构上下文
+        # 6. 生成表结构上下文（批量查询表信息，避免逐表 N+1 查询）
         # 数据库实体里可能包含入库和索引用字段，传给模型前只保留必要信息，
         # 让后续过滤和 SQL 生成节点面对的是更稳定的 TableInfoState 结构。
+        table_infos_result = (
+            await meta_mysql_repository.get_table_infos_by_ids(all_table_ids)
+            if all_table_ids
+            else []
+        )
+        table_info_map: dict[str, TableInfo] = {
+            table_info.id: table_info for table_info in table_infos_result
+        }
+
         table_infos: list[TableInfoState] = []
         for table_id, column_infos in table_to_columns_map.items():
-            table_info: TableInfo = await meta_mysql_repository.get_table_info_by_id(
-                table_id
-            )
+            table_info = table_info_map.get(table_id)
+            # 兜底：极端情况下表信息查不到时跳过该表，避免整条链路崩
+            if table_info is None:
+                logger.warning(f"合并召回信息：未找到表 {table_id} 的元数据，已跳过")
+                continue
             columns = [
                 ColumnInfoState(
                     name=column_info.name,

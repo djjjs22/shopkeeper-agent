@@ -85,6 +85,10 @@ class LLMConfig:
     model_name: str
     api_key: str
     base_url: str
+    # 请求超时（秒）：防止单次慢调用阻塞整个事件循环
+    request_timeout: int = 30
+    # 最大输出 token 数：防止 LLM 生成超长无关内容
+    max_tokens: int = 2000
 
 
 @dataclass

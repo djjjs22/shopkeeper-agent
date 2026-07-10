@@ -46,16 +46,36 @@ async def filter_table(state: DataAgentState, runtime: Runtime[DataAgentContext]
                 ),
             }
         )
+        # 防御性校验：LLM 可能输出 null / list / 结构不符的 dict
+        # 一旦结构异常，降级为「保留全部候选表」，避免因过滤逻辑崩溃而中断整条链路（刀 14）
+        if not isinstance(result, dict):
+            logger.warning(
+                f"{step}: LLM 返回的表过滤结果非 dict（实际 {type(result)}），降级保留全部候选表"
+            )
+            writer({"type": "progress", "step": step, "status": "success"})
+            return {"table_infos": table_infos}
+
         # 模型只负责选择，程序根据选择结果从原始 TableInfoState 中裁剪，避免模型重写复杂结构出错
         filtered_table_infos: list[TableInfoState] = []
         for table_info in table_infos:
-            if table_info["name"] in result:
-                table_info["columns"] = [
-                    column_info
-                    for column_info in table_info["columns"]
-                    if column_info["name"] in result[table_info["name"]]
-                ]
+            table_name = table_info["name"]
+            # 模型只返回被选中的表名列表，未出现的表整张丢弃
+            if table_name not in result:
+                continue
+            selected_columns = result[table_name]
+            # 字段列表也可能异常，防御一下，异常时保留该表全部字段
+            if not isinstance(selected_columns, list):
+                logger.warning(
+                    f"{step}: 表 {table_name} 的字段过滤结果非 list，保留该表全部字段"
+                )
                 filtered_table_infos.append(table_info)
+                continue
+            table_info["columns"] = [
+                column_info
+                for column_info in table_info["columns"]
+                if column_info["name"] in selected_columns
+            ]
+            filtered_table_infos.append(table_info)
 
         logger.info(
             f"过滤后的表信息：{[filtered_table_info['name'] for filtered_table_info in filtered_table_infos]}"
