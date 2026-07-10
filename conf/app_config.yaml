@@ -40,9 +40,10 @@ es:
   index_name: data_agent
 
 llm:
-  model_name: deepseek-v4-pro
+  model_name: MiniMax-M3
   api_key: ${oc.env:LLM_API_KEY}
-  base_url: https://opencode.ai/zen/go/v1
+  # MiniMax OpenAI 兼容端点（https://api.minimaxi.com/v1）
+  base_url: https://api.minimaxi.com/v1
   request_timeout: 30
   max_tokens: 2000
 
