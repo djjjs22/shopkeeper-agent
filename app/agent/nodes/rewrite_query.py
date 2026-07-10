@@ -57,12 +57,9 @@ def _resolve_relative_time(text: str) -> str:
             end = date(today.year - 1, 12, 31)
         else:
             start = date(today.year, today.month - 1, 1)
-            # 月末：下个月第1天减1天
-            if today.month == 12:
-                end = date(today.year, today.month - 1, 31)
-            else:
-                next_month_first = date(today.year, today.month, 1)
-                end = next_month_first - timedelta(days=1)
+            # 月末：下个月第1天减1天（统一逻辑，所有月份都适用）
+            next_month_first = date(today.year, today.month, 1)
+            end = next_month_first - timedelta(days=1)
         text = text.replace("上一个自然月", f"{start.strftime('%Y-%m-%d')}至{end.strftime('%Y-%m-%d')}")
 
     # 当前自然月：本月1号到今天

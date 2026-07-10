@@ -1,21 +1,38 @@
-# AI 应用层痛点审查 RFC — Grill-me 6 刀
+# AI 应用层痛点审查 RFC — Grill-me 20 刀
 
 > **文档状态**: Draft  
-> **审查日期**: 2026-07-09  
-> **审查方式**: grill-me 逐刀追问 + 代码逐行阅读  
-> **审查范围**: shopkeeper-agent 的 AI 应用层（意图理解、召回策略、Prompt 工程、多轮对话、结果校验、评估闭环）  
+> **审查日期**: 2026-07-09 / 2026-07-10  
+> **审查方式**: grill-me 逐刀追问 + 代码逐行阅读（两轮审查）  
+> **审查范围**: shopkeeper-agent 的 AI 应用层（意图理解、召回策略、Prompt 工程、多轮对话、结果校验、评估闭环）+ 第二轮新增（时间处理、元数据查询、N+1 查询、客户端容错、API 安全、部署工程化、测试覆盖、配置安全、前端一致性）  
 > **与既有 RFC 的关系**: 既有《生产环境痛点审查 RFC》偏后端工程（SQL 循环、LLM 容错、Redis 竞态、可观测性），本 RFC 只覆盖 **AI 应用层**，两者互补，不重叠。
 
 ---
 
 ## 目录
 
-1. [刀 1：没有意图识别和 Query 改写——所有问题走同一条链路](#刀-1没有意图识别和-query-改写所有问题走同一条链路)
+### 第一轮（刀 1~6）：AI 应用层核心痛点
+1. [刀 1：没有意图识别和 Query 改写](#刀-1没有意图识别和-query-改写所有问题走同一条链路)
 2. [刀 2：召回是单跳关键词扩展，复杂问题召回必然漏](#刀-2召回是单跳关键词扩展复杂问题召回必然漏)
 3. [刀 3：召回结果没有 rerank，噪声直接灌进 filter](#刀-3召回结果没有-rerank噪声直接灌进-filter)
 4. [刀 4：Prompt 零示例零负例，LLM 输出无法稳定](#刀-4prompt-零示例零负例llm-输出无法稳定)
-5. [刀 5：多轮对话的上下文污染——enhanced\_query 直接塞进 state](#刀-5多轮对话的上下文污染enhanced_query-直接塞进-state)
+5. [刀 5：多轮对话的上下文污染](#刀-5多轮对话的上下文污染enhanced_query-直接塞进-state)
 6. [刀 6：没有结果校验——SQL 执行成功 ≠ 结果正确](#刀-6没有结果校验sql-执行成功--结果正确)
+
+### 第二轮（刀 7~20）：深度审阅新增痛点
+7. [刀 7：AOV 指标定义写错了字段（Bug）](#刀-7aov-指标定义写错了字段bug)
+8. [刀 8：时区陷阱 — date.today() 在 Docker 中算错一天](#刀-8时区陷阱--datetoday-在-docker-容器中算错一天)
+9. [刀 9：rewrite_query.py 12 月要炸](#刀-9rewrite_querypy-12-月要炸)
+10. [刀 10：API 层完全裸奔](#刀-10api-层完全裸奔)
+11. [刀 11：LLM 无超时](#刀-11llm-无超时--一个慢请求拖垮全部)
+12. [刀 12：respond_metadata 暴力子串匹配](#刀-12respond_metadata-暴力子串匹配)
+13. [刀 13：Qdrant / ES 客户端无重连](#刀-13qdrant--es-客户端无重连)
+14. [刀 14：filter 节点对 LLM 输出无 schema 校验](#刀-14filter-节点对-llm-输出无-schema-校验)
+15. [刀 15：merge_retrieved_info 串行 N+1 查询](#刀-15merge_retrieved_info-串行-n1-查询)
+16. [刀 16：extract_keywords 词性覆盖不足 + 无业务词典](#刀-16extract_keywords-词性覆盖不足--无业务词典)
+17. [刀 17：前端"新会话"不清后端](#刀-17前端新会话不清后端)
+18. [刀 18：配置明文凭证](#刀-18配置明文凭证)
+19. [刀 19：start_app.py 错误路径 + 无 Dockerfile](#刀-19start_apppy-错误路径--无-dockerfile)
+20. [刀 20：测试覆盖严重不足](#刀-20测试覆盖严重不足--关键节点-0-测试)
 
 ---
 
@@ -1320,3 +1337,511 @@ async def submit_feedback(request: Request):
 建议先修本 RFC 的 P0（刀 5 上下文污染 + 刀 1 意图识别），因为它们影响**每一次多轮对话**——不修的话，追问场景下召回和生成都会被污染，后端再健壮也救不回来。
 
 每个改动都应配套写 eval 用例，用 `tests/eval_data.py` 的 20 条测试集验证效果变化。
+
+---
+
+# 第二轮 Grill-me 审查 — 新增 14 刀（刀 7~20）
+
+> **审查日期**: 2026-07-10
+> **审查方式**: 第二轮 grill-me 逐刀追问 + 代码逐行深度审阅
+> **审查范围**: 意图分类异常策略、时间处理、元数据查询、N+1 查询、客户端容错、API 安全、部署工程化、测试覆盖、配置安全、前端一致性
+
+---
+
+## 刀 7：AOV 指标定义写错了字段（Bug）
+
+### 现状
+
+`conf/meta_config.yaml` 第 172-176 行：
+
+```yaml
+- name: AOV
+  description: 全称Average Order Value，表示所有订单的成交金额平均值。
+  relevant_columns:
+    - fact_order.order_quantity   # ← 错：数量
+```
+
+AOV = 总成交金额 / 总订单数，应该依赖 `fact_order.order_amount`，不是 `order_quantity`。
+
+### 影响
+
+- `recall_metric` 召回 AOV → `merge` 补齐 `order_quantity` → `generate_sql` 生成 `AVG(order_quantity)`
+- 用户问"平均订单金额"，拿到的是"平均订单件数"
+
+### 处理
+
+用户确认：**是 bug，直接改**。
+
+### 验收
+
+- [ ] AOV 的 `relevant_columns` 改成 `fact_order.order_amount`
+
+---
+
+## 刀 8：时区陷阱 — date.today() 在 Docker 容器中算错一天
+
+### 现状
+
+`add_extra_context.py` 第 27 行 和 `rewrite_query.py` 第 51 行：
+
+```python
+today = date.today()  # 取容器系统时区
+```
+
+Docker 容器默认 UTC，北京凌晨 0-8 点时 `date.today()` 仍是前一天。
+
+### 影响
+
+| 真实时间（北京） | 容器内日期 | 用户问"今天" | LLM 拿到的日期 |
+|---|---|---|---|
+| 7月10日 01:00 | 7月9日 | "今天的销售额" | 2026-07-09 |
+| 1月1日 01:00 | 12月31日 | "今年的GMV" | 2025-12-31 |
+
+### 处理
+
+用户确认：**Docker 加 TZ=Asia/Shanghai**。代码层面不改。
+
+### 验收
+
+- [ ] docker-compose.yaml 所有服务加 `environment: TZ=Asia/Shanghai`
+
+---
+
+## 刀 9：rewrite_query.py 12 月要炸
+
+### 现状
+
+`rewrite_query.py` 第 59-62 行：
+
+```python
+if today.month == 12:
+    end = date(today.year, today.month - 1, 31)  # 11月31日 → ValueError
+```
+
+11 月只有 30 天，`date(2026, 11, 31)` 直接抛异常。`except` 会吞掉异常用原始 query 继续，但"上一个自然月"没被解析成日期范围。
+
+### 处理
+
+用户确认：**修复 12 月 bug**。12 月分支用"下月第 1 天减 1 天"统一逻辑。
+
+### 修复代码
+
+```python
+if today.month == 12:
+    start = date(today.year, 11, 1)
+    end = date(today.year, 12, 1) - timedelta(days=1)  # 11月30日
+```
+
+### 验收
+
+- [ ] 12 月时"上一个自然月"解析为 11月1日~11月30日
+
+---
+
+## 刀 10：API 层完全裸奔
+
+### 现状
+
+1. `QuerySchema` 的 `query: str` 无 `max_length` 限制
+2. 无 IP 速率限制
+3. 无认证/鉴权
+4. CORS `allow_origins=["*"]` + `allow_credentials=True`
+
+### 处理
+
+用户确认：**加 max_length + 简单 IP 限流**。
+
+### 方案
+
+```python
+# query_schema.py
+class QuerySchema(BaseModel):
+    query: str = Field(max_length=500, description="用户查询文本")
+
+# main.py 或 middleware
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
+# query_router.py
+@router.post("/api/query")
+@limiter.limit("10/minute")
+async def query(request: Request, body: QuerySchema):
+    ...
+```
+
+### 验收
+
+- [ ] 超过 500 字符的请求被拒绝（422）
+- [ ] 单 IP 超过 10 次/分钟被限流（429）
+
+---
+
+## 刀 11：LLM 无超时 — 一个慢请求拖垮全部
+
+### 现状
+
+`app/agent/llm.py` 初始化 LLM 时无 `request_timeout`。DeepSeek API 慢响应时 async 事件循环全部阻塞。
+
+### 处理
+
+用户确认：**加 request_timeout=30s**。
+
+### 方案
+
+```python
+llm = init_chat_model(
+    model=model_name,
+    model_provider="openai",
+    api_key=api_key,
+    base_url=base_url,
+    temperature=0,
+    request_timeout=30,   # 新增
+    max_tokens=2000,      # 新增
+)
+```
+
+### 验收
+
+- [ ] LLM 调用超过 30s 自动超时并抛异常
+- [ ] 链路中 LLM 超时时正确降级/报错给用户
+
+---
+
+## 刀 12：respond_metadata 暴力子串匹配
+
+### 现状
+
+`respond_metadata.py` 遍历表名做 `name in query` 子串匹配。问题：
+1. 多表查询只命中第 1 个
+2. 表名互相是子串时命中错误的表
+3. 指标名常见词误命中
+
+### 处理
+
+用户确认：**改成 jieba 分词后匹配**。
+
+### 方案
+
+```python
+import jieba
+
+def _extract_table_name(query, table_names):
+    words = set(jieba.cut(query))
+    matched = [name for name in table_names if name in words]
+    return matched[0] if matched else None
+```
+
+### 验收
+
+- [ ] "dim_product 和 dim_customer 有哪些字段" 能识别多个表名
+- [ ] "我要看数据的实际情况" 不误命中指标名
+
+---
+
+## 刀 13：Qdrant / ES 客户端无重连
+
+### 现状
+
+客户端只创建一次，容器重启后连接池失效，无自动重连。
+
+### 处理
+
+用户确认：**在 recall 节点 catch 后重试 1 次**。
+
+### 方案
+
+```python
+# recall_column.py 示例
+try:
+    results = await repository.search(embedding)
+except Exception as e:
+    logger.warning(f"Qdrant 检索失败，重试一次: {e}")
+    await asyncio.sleep(1)  # 短暂等待
+    results = await repository.search(embedding)  # 重试一次
+```
+
+### 验收
+
+- [ ] Qdrant 重启后，recall 节点第 2 次检索能恢复
+
+---
+
+## 刀 14：filter 节点对 LLM 输出无 schema 校验
+
+### 现状
+
+`filter_table.py` 假设 LLM 输出 dict，`filter_metric.py` 假设输出 list。LLM 输出 null/不同结构时 TypeError 崩掉链路。
+
+### 处理
+
+用户确认：**加 isinstance 检查 + 降级**。
+
+### 方案
+
+```python
+# filter_table.py
+if not isinstance(result, dict) or not result:
+    # LLM 输出格式不符合预期，降级：直接返回所有候选
+    writer({"type": "warning", "message": "filter_table LLM 输出格式异常，降级返回全候选"})
+    return {"table_infos": table_infos}
+
+# filter_metric.py
+if not isinstance(result, list):
+    writer({"type": "warning", "message": "filter_metric LLM 输出格式异常，降级返回空"})
+    return {"metric_infos": []}
+```
+
+### 验收
+
+- [ ] LLM 输出 null 时不崩，降级返回原始候选
+- [ ] LLM 输出错误结构时有 warning 日志
+
+---
+
+## 刀 15：merge_retrieved_info 串行 N+1 查询
+
+### 现状
+
+为每个指标依赖字段、每个字段取值、每张表的主外键都**逐个**查数据库。20+ 次串行 DB 往返。
+
+### 处理
+
+用户确认：**改成批量 IN 查询**。
+
+### 方案
+
+```python
+# 不再逐个查
+# for col_id in missing_column_ids:
+#     col = await meta_mysql_repository.get_column_info_by_id(col_id)
+
+# 改成批量
+missing_ids = list(missing_column_ids)
+columns = await meta_mysql_repository.get_column_infos_by_ids(missing_ids)
+for col in columns:
+    retrieved_column_infos_map[col.id] = col
+```
+
+Repository 新增批量方法：
+
+```python
+async def get_column_infos_by_ids(self, ids: list[str]) -> list[ColumnInfo]:
+    stmt = select(ColumnInfoEntity).where(ColumnInfoEntity.id.in_(ids))
+    result = await self.session.execute(stmt)
+    return [self.mapper.to_domain(entity) for entity in result.scalars().all()]
+```
+
+### 验收
+
+- [ ] merge 节点 DB 查询次数从 20+ 降到 3-4 次
+
+---
+
+## 刀 16：extract_keywords 词性覆盖不足 + 无业务词典
+
+### 现状
+
+1. `allowPOS` 缺 `m`（数词）和 `mq`（量词）—— "3月"、"第一季度" 中的数字被丢弃
+2. 无 `jieba.load_userdict()` —— GMV/AOV/dim_product 被错误切分
+
+### 处理
+
+用户确认：**加业务词典 + 补数词词性**。
+
+### 方案
+
+```python
+# extract_keywords.py
+# 1. 补数词词性
+allow_pos = {"n", "nr", "ns", "nt", "nz", "eng", "m", "mq", "vn"}
+
+# 2. 加载业务词典
+import jieba
+jieba.initialize()
+for word in ["GMV", "AOV", "dim_region", "dim_customer", "dim_product",
+             "dim_date", "fact_order", "region_name", "member_level",
+             "order_amount", "order_quantity", "customer_name"]:
+    jieba.add_word(word)
+```
+
+### 验收
+
+- [ ] "GMV" 被整词识别，不被切分
+- [ ] "3月" 中 "3" 被保留在关键词列表
+
+---
+
+## 刀 17：前端"新会话"不清后端
+
+### 现状
+
+`App.tsx` 第 158 行 `clearConversation` 只清前端 `messages`，不通知后端清 Redis。后端历史仍在，下次发消息时 LLM 拿到旧历史。
+
+### 处理
+
+用户确认：**加一个清会话 API**。
+
+### 方案
+
+```python
+# query_router.py 新增
+@router.post("/api/clear-session/{session_id}")
+async def clear_session(session_id: str):
+    await session_store.clear_session(session_id)
+    return {"success": True}
+```
+
+```typescript
+// App.tsx clearConversation 改动
+const clearConversation = async () => {
+  const sessionId = getCookie("session_id");
+  if (sessionId) {
+    await fetch(`/api/clear-session/${sessionId}`, { method: "POST" });
+  }
+  setMessages([]);
+};
+```
+
+### 验收
+
+- [ ] 点击"新会话"后，后端 Redis 历史被清空
+- [ ] 下一条消息不携带旧历史上下文
+
+---
+
+## 刀 18：配置明文凭证
+
+### 现状
+
+- `app_config.yaml` 中 DB 密码 `dili123` 明文
+- `docker-compose.yaml` 中 `MYSQL_ROOT_PASSWORD: dili123` 明文
+
+### 处理
+
+用户确认：**改成 .env 引用**。
+
+### 方案
+
+```yaml
+# app_config.yaml
+database:
+  password: ${oc.env:DB_PASSWORD}   # 改成环境变量引用
+```
+
+```yaml
+# docker-compose.yaml
+mysql:
+  environment:
+    MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}  # 从 .env 读取
+    TZ: Asia/Shanghai
+```
+
+```env
+# .env 新增
+DB_PASSWORD=dili123
+```
+
+### 验收
+
+- [ ] git 跟踪的文件中不含明文密码
+
+---
+
+## 刀 19：start_app.py 错误路径 + 无 Dockerfile
+
+### 现状
+
+1. `start_app.py` 第 9 行指向 `d:\\shopkeeper-agent-main\\interview-simulator\\backend`（另一个项目路径）
+2. docker/ 目录无应用 Dockerfile，生产部署只能裸跑
+
+### 处理
+
+用户确认：**删 start_app.py + 写 Dockerfile**。
+
+### 方案
+
+删除 `start_app.py`。
+
+新增 `docker/Dockerfile`：
+
+```dockerfile
+FROM python:3.13-slim
+WORKDIR /app
+RUN pip install uv
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+COPY . .
+EXPOSE 8000
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### 验收
+
+- [ ] `start_app.py` 被删除
+- [ ] `docker build -f docker/Dockerfile .` 能构建成功
+
+---
+
+## 刀 20：测试覆盖严重不足 — 关键节点 0 测试
+
+### 现状
+
+`tests/` 只有 3 个真测试（sql_safety / session_store / scheduler）。所有 agent 节点 0 测试。整条 LangGraph 链路无端到端测试。
+
+### 处理
+
+用户确认：**加端到端测试**。
+
+### 方案
+
+```python
+# tests/test_e2e_agent.py
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+@pytest.mark.asyncio
+async def test_e2e_data_query_flow():
+    """用 mock 数据跑整条 LangGraph 链路"""
+    # mock embedding, qdrant, es, llm, mysql
+    # 构造 state -> 跑 graph.astream -> 断言最终 state 包含正确的 sql 和 result
+
+@pytest.mark.asyncio
+async def test_e2e_chitchat_short_circuit():
+    """闲聊意图应该短路，不走 RAG"""
+
+@pytest.mark.asyncio
+async def test_e2e_empty_recall_graceful():
+    """召回为空时应该优雅降级"""
+
+@pytest.mark.asyncio
+async def test_e2e_filter_llm_bad_output():
+    """filter LLM 输出异常格式时不应该崩"""
+```
+
+### 验收
+
+- [ ] `pytest tests/test_e2e_agent.py` 通过
+- [ ] 覆盖正常 data_query、闲聊、召回为空、filter 异常 4 个场景
+
+---
+
+## 优先级排序（全 20 刀）
+
+| 优先级 | 刀 | 改动量 | 影响面 |
+|---|---|---|---|
+| **Bug** | 7. AOV 指标定义错误 | 极小（改 1 行 YAML） | 影响所有 AOV 查询 |
+| **Bug** | 9. 12月解析炸掉 | 极小（改 3 行代码） | 12月所有"上月"查询 |
+| P0 | 8. 时区 | 小（docker-compose 加 TZ） | 凌晨时段所有查询 |
+| P0 | 11. LLM 无超时 | 小（llm.py 加 2 个参数） | 高并发时全阻塞 |
+| P0 | 10. API 无限流 | 小（加 middleware + max_length） | 公网暴露即被攻击 |
+| P0 | 18. 明文凭证 | 小（改 .env 引用） | 密码泄露 |
+| P1 | 14. filter 无 schema 校验 | 小（2 个节点加 isinstance） | LLM 输出异常时链路崩 |
+| P1 | 15. N+1 查询 | 中（repository 加批量方法） | merge 节点性能 |
+| P1 | 16. extract_keywords 词典+词性 | 小（extract_keywords.py 改） | 召回准确率 |
+| P1 | 12. respond_metadata 匹配 | 小（改匹配逻辑） | 元数据查询准确率 |
+| P1 | 17. 前端清会话 | 小（新增 1 个 API + 前端调） | 多轮对话一致性 |
+| P2 | 13. Qdrant/ES 重试 | 小（recall 节点加 retry） | 容器重启后恢复 |
+| P2 | 19. 部署工程化 | 中（删脚本 + 写 Dockerfile） | 生产部署 |
+| P2 | 20. 端到端测试 | 中（写 e2e test） | 回归保障 |
