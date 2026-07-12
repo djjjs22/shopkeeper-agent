@@ -12,7 +12,12 @@
   意图分类让闲聊和元数据查询短路，只有真正的数据查询才走完整链路。
 """
 
-from langchain_core.output_parsers import StrOutputParser
+# 2026-07-11 改造：StrOutputParser → StripThinkStrParser
+# 场景：意图分类（think 块会污染分类标签）
+# 详见 app/core/safe_json_parser.py 顶部 + docs/notes/eval_e2e_think兼容改造-20260711.md
+from langchain_core.output_parsers import StrOutputParser  # noqa: F401  # 保留以备回滚
+
+from app.core.safe_json_parser import _build_strip_parser_runnable
 from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
 
@@ -40,8 +45,8 @@ async def classify_intent(state: DataAgentState, runtime: Runtime[DataAgentConte
             template=load_prompt("classify_intent"),
             input_variables=["query"],
         )
-        # 意图分类只需要纯文本输出（一个单词），用 StrOutputParser 即可
-        chain = prompt | llm | StrOutputParser()
+        # 意图分类只需要纯文本输出（一个单词），用 _build_strip_parser_runnable 兼容 think 块
+        chain = prompt | llm | _build_strip_parser_runnable()
 
         # temperature=0 的 LLM 仍然可能输出多余空格或换行，需要清洗
         result = await chain.ainvoke({"query": query})

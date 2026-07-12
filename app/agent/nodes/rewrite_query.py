@@ -16,7 +16,16 @@
 
 from datetime import date, timedelta
 
-from langchain_core.output_parsers import StrOutputParser
+# 2026-07-11 改造：StrOutputParser → StripThinkStrParser
+# 场景：改写 query（think 块会污染 query 字段，污染下游）
+# 详见 app/core/safe_json_parser.py 顶部 + docs/notes/eval_e2e_think兼容改造-20260711.md
+from langchain_core.output_parsers import StrOutputParser  # noqa: F401  # 保留以备回滚
+
+# 2026-07-11 改造：StrOutputParser → StripThinkStrParser
+# 场景：改写 query（think 块污染 query 字段，污染下游节点）
+# 详见 app/core/safe_json_parser.py 顶部 + docs/notes/eval_e2e_think兼容改造-20260711.md
+# 注意：这个文件用的是 _build_strip_parser_runnable（项目自定义的可运行封装），效果同 StripThinkStrParser
+from app.core.safe_json_parser import _build_strip_parser_runnable
 from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
 
@@ -99,7 +108,7 @@ async def rewrite_query(state: DataAgentState, runtime: Runtime[DataAgentContext
             template=load_prompt("rewrite_query"),
             input_variables=["query", "history"],
         )
-        chain = prompt | llm | StrOutputParser()
+        chain = prompt | llm | _build_strip_parser_runnable()
 
         # LLM 负责语义层面的补全和时间表达标准化
         rewritten = await chain.ainvoke({

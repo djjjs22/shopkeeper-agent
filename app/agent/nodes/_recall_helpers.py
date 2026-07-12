@@ -19,11 +19,14 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
-from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import PromptTemplate
 
 from app.agent.llm import llm
 from app.core.log import logger
+# 2026-07-11 改造：JsonOutputParser → SafeJsonOutputParser
+# 场景：三路召回的关键词扩展（M3 模型 think 污染）
+# 详见 app/core/safe_json_parser.py 顶部 + docs/notes/eval_e2e_think兼容改造-20260711.md
+from app.core.safe_json_parser import SafeJsonOutputParser
 from app.prompt.prompt_loader import load_prompt
 
 T = TypeVar("T")
@@ -49,7 +52,8 @@ async def expand_keywords_with_llm(
         input_variables=["query"],
     )
     # 所有 extend_keywords_for_*_recall prompt 都要求只输出 JSON 数组
-    chain = prompt | llm | JsonOutputParser()
+    # 用 SafeJsonOutputParser 兼容 M3/DeepSeek 的 <think>...</think> 块
+    chain = prompt | llm | SafeJsonOutputParser()
 
     try:
         result = await chain.ainvoke({"query": query})

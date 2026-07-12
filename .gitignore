@@ -5,6 +5,7 @@
 /out-tsc
 /bazel-out
 /node_modules
+/frontend/node_modules/   # 2026-07-13 新增：嵌套目录的 node_modules（/node_modules 只匹配根）
 .npm-cache
 .angular/
 .pnpm-store/
@@ -27,6 +28,9 @@ wheels/
 # Profiling
 chrome-profiler-events*.json
 speed-measure-plugin*.json
+
+# Test artifacts (2026-07-13 新增：评测结果 JSON 不上传)
+tests/results/
 
 # IDEs and editors
 /.idea

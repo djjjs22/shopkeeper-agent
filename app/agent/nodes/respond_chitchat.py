@@ -5,9 +5,14 @@
 直接用 LLM 生成自然回复，跳过 jieba / Embedding / Qdrant / ES / SQL 全流程。
 """
 
-from langchain_core.output_parsers import StrOutputParser
+# 2026-07-11 改造：StrOutputParser → StripThinkStrParser
+# 场景：闲聊回复（think 块会污染最终回复给用户）
+# 详见 app/core/safe_json_parser.py 顶部 + docs/notes/eval_e2e_think兼容改造-20260711.md
+from langchain_core.output_parsers import StrOutputParser  # noqa: F401  # 保留以备回滚
 from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
+
+from app.core.safe_json_parser import _build_strip_parser_runnable
 
 from app.agent.context import DataAgentContext
 from app.agent.llm import llm
@@ -40,7 +45,7 @@ async def respond_chitchat(state: DataAgentState, runtime: Runtime[DataAgentCont
             template=CHITCHAT_PROMPT,
             input_variables=["query"],
         )
-        chain = prompt | llm | StrOutputParser()
+        chain = prompt | llm | _build_strip_parser_runnable()
         result = await chain.ainvoke({"query": query})
 
         logger.info(f"闲聊响应: {result}")

@@ -6,7 +6,6 @@ SQL 生成节点
 """
 
 import yaml
-from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
 
@@ -14,6 +13,10 @@ from app.agent.context import DataAgentContext
 from app.agent.llm import llm
 from app.agent.state import DataAgentState
 from app.core.log import logger
+# 2026-07-11 改造：StrOutputParser → StripThinkStrParser
+# 场景：生成 SQL（think 块污染 SQL，validate_sql 会报语法错）
+# 详见 app/core/safe_json_parser.py 顶部 + docs/notes/eval_e2e_think兼容改造-20260711.md
+from app.core.safe_json_parser import StripThinkStrParser
 from app.prompt.prompt_loader import load_prompt
 
 
@@ -42,8 +45,9 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
                 "query",
             ],
         )
-        # SQL 生成节点只需要纯文本 SQL，不能要求模型输出 JSON 或 Markdown 代码块
-        output_parser = StrOutputParser()
+        # SQL 生成节点只需要纯文本 SQL。用 StripThinkStrParser 兼容 M3/DeepSeek 的 <think> 块
+        from app.core.safe_json_parser import _build_strip_parser_runnable
+        output_parser = _build_strip_parser_runnable()
         chain = prompt | llm | output_parser
 
         result = await chain.ainvoke(

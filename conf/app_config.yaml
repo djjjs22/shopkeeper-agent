@@ -11,7 +11,7 @@ logging:
 
 db_meta:
   host: localhost
-  port: 3306
+  port: 3307
   user: didilili
   # 明文密码已移除，改为从 .env 读取（见 .env.example）
   password: ${oc.env:DB_PASSWORD,dili123}
@@ -19,7 +19,7 @@ db_meta:
 
 db_dw:
   host: localhost
-  port: 3306
+  port: 3307
   user: didilili
   password: ${oc.env:DB_PASSWORD,dili123}
   database: dw

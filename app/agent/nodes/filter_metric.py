@@ -6,7 +6,6 @@
 """
 
 import yaml
-from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
 
@@ -14,6 +13,11 @@ from app.agent.context import DataAgentContext
 from app.agent.llm import llm
 from app.agent.state import DataAgentState, MetricInfoState
 from app.core.log import logger
+# 2026-07-11 新增：项目自己的 parser，兼容 M3/DeepSeek 的 <think> 块
+# 2026-07-11 改造：JsonOutputParser → SafeJsonOutputParser
+# 场景：过滤指标信息（M3 模型会输出 <think>...</think> 块污染 JSON）
+# 详见 app/core/safe_json_parser.py 顶部 + docs/notes/eval_e2e_think兼容改造-20260711.md
+from app.core.safe_json_parser import SafeJsonOutputParser
 from app.prompt.prompt_loader import load_prompt
 
 
@@ -34,7 +38,7 @@ async def filter_metric(state: DataAgentState, runtime: Runtime[DataAgentContext
             input_variables=["query", "metric_infos"],
         )
         # filter_metric_info prompt 要求模型只输出 JSON 数组
-        output_parser = JsonOutputParser()
+        output_parser = SafeJsonOutputParser()  # 详见顶部注释
         # LCEL 管道：填充提示词 -> 调用模型 -> 解析 JSON
         chain = prompt | llm | output_parser
 

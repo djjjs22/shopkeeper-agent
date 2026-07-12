@@ -6,7 +6,6 @@ SQL 修正节点
 """
 
 import yaml
-from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
 
@@ -14,6 +13,10 @@ from app.agent.context import DataAgentContext
 from app.agent.llm import llm
 from app.agent.state import DataAgentState
 from app.core.log import logger
+# 2026-07-11 改造：StrOutputParser → StripThinkStrParser
+# 场景：修正 SQL（think 污染问题同 generate_sql）
+# 详见 app/core/safe_json_parser.py 顶部 + docs/notes/eval_e2e_think兼容改造-20260711.md
+from app.core.safe_json_parser import StripThinkStrParser
 from app.prompt.prompt_loader import load_prompt
 
 
@@ -48,8 +51,9 @@ async def correct_sql(state: DataAgentState, runtime: Runtime[DataAgentContext])
                 "error",
             ],
         )
-        # 修正后的输出仍然是一条纯 SQL 文本，用来覆盖 state["sql"]
-        output_parser = StrOutputParser()
+        # 修正后的输出仍然是一条纯 SQL 文本，用 StripThinkStrParser 兼容 <think> 块
+        from app.core.safe_json_parser import _build_strip_parser_runnable
+        output_parser = _build_strip_parser_runnable()
         chain = prompt | llm | output_parser
 
         result = await chain.ainvoke(

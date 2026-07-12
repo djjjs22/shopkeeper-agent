@@ -6,7 +6,6 @@
 """
 
 import yaml
-from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
 
@@ -14,6 +13,10 @@ from app.agent.context import DataAgentContext
 from app.agent.llm import llm
 from app.agent.state import DataAgentState, TableInfoState
 from app.core.log import logger
+# 2026-07-11 改造：JsonOutputParser → SafeJsonOutputParser
+# 场景：过滤表信息（M3 模型输出 think 污染 JSON）
+# 详见 app/core/safe_json_parser.py 顶部 + docs/notes/eval_e2e_think兼容改造-20260711.md
+from app.core.safe_json_parser import SafeJsonOutputParser
 from app.prompt.prompt_loader import load_prompt
 
 
@@ -34,7 +37,7 @@ async def filter_table(state: DataAgentState, runtime: Runtime[DataAgentContext]
             input_variables=["query", "table_infos"],
         )
         # filter_table_info prompt 要求模型只输出 JSON 对象：表名 -> 字段名列表
-        output_parser = JsonOutputParser()
+        output_parser = SafeJsonOutputParser()
         # LCEL 管道：填充提示词 -> 调用模型 -> 解析 JSON
         chain = prompt | llm | output_parser
 

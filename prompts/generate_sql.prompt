@@ -23,6 +23,15 @@
 6. 默认只生成一条SQL，不可生成多条SQL。
 7. SELECT 中的聚合字段、计算字段和函数表达式必须使用 AS 指定清晰、稳定的结果列别名，优先使用用户问题中的业务名称或指标名称，避免返回 `SUM(...)` 这类表达式列名。
 8. 输出必须仅包含一条完整 SQL 语句的纯文本，严禁使用```、```sql 等 Markdown代码块或任何格式化符号。
+9. 日期处理：涉及"上个月/上周/过去30天/今年/本月"等相对时间时，必须用日期函数（CURRENT_DATE / DATE_SUB / DATE_FORMAT）计算，严禁硬编码具体日期（如 20260601）。
+   - "上个月" → `DATE_FORMAT(DATE_SUB(CURRENT_DATE, INTERVAL 1 MONTH), '%Y-%m')` 或类似
+   - "过去30天" → `DATE_SUB(CURRENT_DATE, INTERVAL 30 DAY)`
+   - "今年" → `YEAR(CURRENT_DATE) = 2026`
+   - "本月" → `DATE_FORMAT(CURRENT_DATE, '%Y-%m') = DATE_FORMAT(某日期, '%Y-%m')`
+10. 禁止输出占位符（CAST(NULL AS CHAR)、'未提供'等字符串）。如果某字段在 schema 里不存在，根据业务常识选最相关的字段；查不出就在 SELECT 中省略，而不是输出 NULL 占位。
+11. WHERE 子句兜底：如果"可用数据表信息"或"可参考的指标信息"中
+    出现了与查询相关的枚举值（如 payment_method='微信'、region_name='华东'），
+    必须把这些过滤条件写进 WHERE 子句，不要漏。
 
 【示例】
 
@@ -40,6 +49,24 @@ SELECT dim_product.category AS 商品品类, SUM(fact_order.order_amount) AS 销
 用户查询：华南地区黄金会员的客户在今年Q1的GMV是多少？
 SQL：
 SELECT SUM(fact_order.order_amount) AS GMV FROM fact_order JOIN dim_region ON fact_order.region_id = dim_region.region_id JOIN dim_customer ON fact_order.customer_id = dim_customer.customer_id JOIN dim_date ON fact_order.date_id = dim_date.date_id WHERE dim_region.region_name = '华南' AND dim_customer.member_level = '黄金' AND dim_date.year = 2025 AND dim_date.quarter = 'Q1'
+
+示例四：相对时间（必须用日期函数，严禁硬编码）
+用户查询：上个月的订单数
+SQL：
+SELECT COUNT(*) AS 订单数 FROM fact_order WHERE order_date >= DATE_SUB(CURRENT_DATE, INTERVAL 1 MONTH)
+
+示例五：枚举值 WHERE 子句（必须用召回到的值过滤）
+用户查询：微信支付的订单总额
+SQL：
+SELECT SUM(order_amount) AS 订单总额 FROM fact_order WHERE payment_method = '微信'
+
+示例六：复杂日期（DATE_FORMAT 取年/月，不能硬编码）
+用户查询：本月各天的销售额
+SQL：
+SELECT order_date AS 日期, SUM(order_amount) AS 销售额 FROM fact_order
+WHERE order_date >= DATE_FORMAT(CURRENT_DATE, '%Y-%m-01')
+GROUP BY order_date
+ORDER BY order_date
 
 用户查询如下：
 {query}

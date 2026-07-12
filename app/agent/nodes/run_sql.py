@@ -177,6 +177,21 @@ async def run_sql(
         # 调用我们上面定义的 _clean_sql 函数，去掉 ```sql ... ``` 标记
         sql = _clean_sql(raw_sql)
 
+        # ═══════════════════════════════════════════════════
+        # 2026-07-11 加固：空 SQL 防御（v2 修正：移到 _clean_sql 之后）
+        # ═══════════════════════════════════════════════════
+        # 之前 v4 在 raw_sql 阶段检查，但 raw_sql 有可能包裹在 ```sql ``` 围栏里
+        # _clean_sql 之后才是真正的 SQL——这时再判空更准
+        # 例：raw_sql="```sql\nSELECT 1\n```" → sql="SELECT 1"（之前会被误判空）
+        if not sql or not sql.strip():
+            error_msg = "Agent 生成的 SQL 为空（可能是上游节点 think 块解析失败或状态异常）"
+            logger.error(f"[SQL安全] {error_msg}")
+            return {
+                "sql": raw_sql or "",
+                "execution_result": None,
+                "error": error_msg,
+            }
+
         # 日志记录：方便排查问题时查看当时执行的 SQL
         # sql[:200] = 切片，只取前 200 个字符（避免日志过长）
         # 切片语法 [start:end]：你见过但不知道名字的操作
