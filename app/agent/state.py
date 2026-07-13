@@ -53,6 +53,21 @@ class DateInfoState(TypedDict):
     quarter: str
 
 
+class TimeRangeState(TypedDict):
+    """查询改写节点输出的结构化时间范围
+
+    关键设计：query 字段保留原句，time_range 单独存时间范围。
+    这样 jieba 分词和 Embedding 召回看到的是自然语言原句，不会被
+    "2025-12-01至2025-12-31" 这种机械字符串污染。
+    """
+
+    # 显式时间范围的起止日期（YYYY-MM-DD），None 表示无显式范围
+    start_date: str
+    end_date: str
+    # 原始时间表达，用于日志和回溯（如 "上个月"、"最近30天"）
+    raw_expression: str
+
+
 class DBInfoState(TypedDict):
     """SQL 生成阶段使用的数据库环境信息"""
 
@@ -64,15 +79,17 @@ class DataAgentState(TypedDict):
     """一次问数链路中的核心状态
 
     意图分类和查询改写（刀1）在链路最前面执行：
-      query   — 用户当前问题，纯净的，不含历史对话拼接文本
+      query   — 用户当前问题，**始终是原始输入**，不被改写节点覆盖
       history — 多轮对话历史，单独存储，需要历史的节点自行取用
       intent  — 意图分类结果：chitchat / metadata_query / data_query
+      time_range — 结构化时间范围，rewrite_query 节点的输出，SQL 生成时消费
     """
 
     # ── 用户输入与对话上下文 ──
-    query: str  # 用户当前问题，只放原始输入，不再被 build_prompt 拼接污染
+    query: str  # 用户当前问题，只放原始输入，永不被改写节点覆盖（2026-07-14 改造）
     history: list  # 多轮对话历史 [{"role": ..., "content": ...}]，需要历史的节点自己从 state 取
     intent: str  # 意图分类结果，控制 graph 条件边路由
+    time_range: TimeRangeState  # 查询改写输出的结构化时间范围（2026-07-14 改造）
 
     # ── 召回阶段 ──
     keywords: list[str]  # 抽取的关键词
