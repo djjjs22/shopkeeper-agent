@@ -68,6 +68,22 @@ class TimeRangeState(TypedDict):
     raw_expression: str
 
 
+class InheritedContext(TypedDict):
+    """从历史对话中继承的上下文（RFC 刀1 改造：实体/条件/维度继承）
+
+    关键设计：多轮对话时用户经常省略主语/条件（"换成华北"、"按门店拆"），
+    本结构化字段显式记录从历史继承了什么，让 generate_intent 节点不用
+    再去历史对话里"猜"。
+    """
+
+    # 实体继承：如 ["SKU1", "SKU2", "SKU3"]、["客户A", "客户B"]
+    entities: list[str]
+    # 条件继承：如 ["region='华北'", "year=2025"]，可直接拼到 SQL WHERE
+    conditions: list[str]
+    # 维度继承：如 ["省份", "门店"]，是用户新加的分组维度
+    dimensions: list[str]
+
+
 class DBInfoState(TypedDict):
     """SQL 生成阶段使用的数据库环境信息"""
 
@@ -83,6 +99,8 @@ class DataAgentState(TypedDict):
       history — 多轮对话历史，单独存储，需要历史的节点自行取用
       intent  — 意图分类结果：chitchat / metadata_query / data_query
       time_range — 结构化时间范围，rewrite_query 节点的输出，SQL 生成时消费
+      inherited_from_history — 从历史对话继承的实体/条件/维度（2026-07-14 改造）
+      query_intent — 结构化查询意图（JSON），generate_intent 节点输出，generate_sql 节点消费
     """
 
     # ── 用户输入与对话上下文 ──
@@ -90,6 +108,8 @@ class DataAgentState(TypedDict):
     history: list  # 多轮对话历史 [{"role": ..., "content": ...}]，需要历史的节点自己从 state 取
     intent: str  # 意图分类结果，控制 graph 条件边路由
     time_range: TimeRangeState  # 查询改写输出的结构化时间范围（2026-07-14 改造）
+    inherited_from_history: InheritedContext  # 从历史继承的实体/条件/维度（2026-07-14 改造）
+    query_intent: dict  # 结构化查询意图（JSON），generate_intent 输出（2026-07-14 改造）
 
     # ── 召回阶段 ──
     keywords: list[str]  # 抽取的关键词

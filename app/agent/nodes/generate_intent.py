@@ -1,0 +1,175 @@
+# -*- coding: utf-8 -*-
+"""
+查询意图生成节点（RFC 刀1 改造：大模型角色压缩）
+
+为什么有这个节点
+================
+改前（2026-07-14 前）：
+  `generate_sql` 节点让 LLM 一次性干两件事：
+    1. 理解业务意图（哪些表、哪些条件、哪些聚合）
+    2. 写 SQL 语法（SELECT 关键字、JOIN 顺序、缩进）
+  这违反 "LLM 角色压缩" 原则 —— 让 LLM 干确定性工作（写 SQL 语法）会
+  引入格式不一致、缩进差异、关键字大小写等不稳定因素。
+
+改后（2026-07-14 后）：
+  - 本节点（`generate_intent`）只让 LLM 干"语义层"工作
+    输入：用户问题 + 表结构 + 指标定义 + 时间范围 + 历史继承
+    输出：结构化 JSON intent（业务意图）
+  - `generate_sql` 节点变成"渲染节点"（只调 sql_template.render_sql）
+  - 好处：见 prompts/generate_intent.prompt 顶部说明
+
+输入上下文来源
+==============
+- state["query"]: 用户原句（永不被改写，参见 rewrite_query 节点）
+- state["time_range"]: 结构化时间范围（2026-07-14 改造后由 rewrite_query 提供）
+- state["inherited_from_history"]: 从历史对话继承的实体/条件/维度
+- state["table_infos"]: filter_table 节点输出的精简表结构
+- state["metric_infos"]: filter_metric 节点输出的精简指标
+- state["date_info"] / state["db_info"]: 来自 add_extra_context 节点
+
+输出
+====
+- state["query_intent"]: dict，schema 见 sql_template.py 顶部 docstring
+- 失败时降级为空 intent（generate_sql 节点会用 SELECT 1 兜底）
+"""
+
+import yaml
+from langchain_core.prompts import PromptTemplate
+from langgraph.runtime import Runtime
+
+from app.agent.context import DataAgentContext
+from app.agent.llm import llm
+from app.agent.state import DataAgentState, InheritedContext, TimeRangeState
+from app.core.log import logger
+
+# 2026-07-11 改造：JsonOutputParser → SafeJsonOutputParser
+# 场景：LLM 输出 JSON 时被 think 块污染（M3/DeepSeek 模型）
+# 详见 app/core/safe_json_parser.py 顶部
+from app.core.safe_json_parser import SafeJsonOutputParser
+from app.prompt.prompt_loader import load_prompt
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 辅助：把结构化字段格式化成 prompt 可读文本
+# ─────────────────────────────────────────────────────────────────────
+
+def _format_time_range_for_prompt(time_range: TimeRangeState | None) -> str:
+    """time_range → 可读文本
+
+    无显式时间时返回 "无"，让 LLM 知道不写时间条件。
+    """
+    if not time_range or not time_range.get("raw_expression"):
+        return "无"
+    return (
+        f"原始表达: {time_range['raw_expression']}\n"
+        f"起止日期: {time_range['start_date']} 至 {time_range['end_date']}"
+    )
+
+
+def _format_inherited_for_prompt(inherited: InheritedContext | None) -> str:
+    """inherited_from_history → 可读文本
+
+    把实体/条件/维度三类继承信息格式化成 LLM 易读的形式。
+    """
+    if not inherited:
+        return "无"
+    parts = []
+    if inherited.get("entities"):
+        parts.append(f"实体: {', '.join(inherited['entities'])}")
+    if inherited.get("conditions"):
+        parts.append(f"条件: {' AND '.join(inherited['conditions'])}")
+    if inherited.get("dimensions"):
+        parts.append(f"维度: {', '.join(inherited['dimensions'])}")
+    return "; ".join(parts) if parts else "无"
+
+
+def _format_business_rules_for_prompt(query: str) -> str:
+    """根据 query 匹配业务规则，格式化成 LLM prompt 可读文本
+
+    2026-07-14 P2 改造：把业务规则引擎接入 generate_intent 节点。
+    改前：所有 WHERE 条件靠 LLM 拼，业务规则（如"已付款"=什么状态）容易拼错。
+    改后：先在 Python 里匹配业务规则，把 WHERE 条件直接喂给 LLM。
+         LLM 必须**直接用**这些条件，不准改写（prompt 里会强调）。
+    """
+    # 延迟导入（避免循环依赖）
+    from app.services.rule_service import format_for_prompt
+
+    return format_for_prompt(query)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 节点主体
+# ─────────────────────────────────────────────────────────────────────
+
+async def generate_intent(state: DataAgentState, runtime: Runtime[DataAgentContext]):
+    """调用 LLM 把用户问题 + 上下文转换为结构化 JSON intent
+
+    关键设计：
+    - 失败的兜底：返回空 intent（不抛异常），让下游 generate_sql 用 SELECT 1 兜底
+    - prompt 严格约束 LLM "只输出 JSON，不输出 SQL"（见 generate_intent.prompt）
+    - 用 SafeJsonOutputParser 兼容 M3/DeepSeek 的 think 块
+    """
+    writer = runtime.stream_writer
+    step = "生成查询意图"
+    writer({"type": "progress", "step": step, "status": "running"})
+
+    try:
+        # 读取所有需要的上下文
+        query = state["query"]
+        table_infos = state["table_infos"]
+        metric_infos = state["metric_infos"]
+        date_info = state["date_info"]
+        db_info = state["db_info"]
+        time_range = state.get("time_range", TimeRangeState(
+            start_date="", end_date="", raw_expression=""
+        ))
+        inherited = state.get("inherited_from_history")
+        # P2 改造：根据 query 匹配业务规则（已付款/华北/黄金会员等）
+        business_rules = _format_business_rules_for_prompt(query)
+
+        # 构造 prompt
+        prompt = PromptTemplate(
+            template=load_prompt("generate_intent"),
+            input_variables=[
+                "table_infos",
+                "metric_infos",
+                "date_info",
+                "db_info",
+                "time_range",
+                "inherited_context",
+                "business_rules",  # P2 新增
+                "query",
+            ],
+        )
+        # 用 SafeJsonOutputParser 解析 LLM 输出的 JSON
+        # 兼容 think 块 + 抓 ```json``` 围栏
+        chain = prompt | llm | SafeJsonOutputParser()
+
+        intent = await chain.ainvoke({
+            # YAML 序列化表结构，保留嵌套 + 中文
+            "table_infos": yaml.dump(table_infos, allow_unicode=True, sort_keys=False),
+            "metric_infos": yaml.dump(metric_infos, allow_unicode=True, sort_keys=False),
+            "date_info": yaml.dump(date_info, allow_unicode=True, sort_keys=False),
+            "db_info": yaml.dump(db_info, allow_unicode=True, sort_keys=False),
+            "time_range": _format_time_range_for_prompt(time_range),
+            "inherited_context": _format_inherited_for_prompt(inherited),
+            "business_rules": business_rules,  # P2 新增
+            "query": query,
+        })
+
+        # 防御性：LLM 可能返回非 dict（如 list、str、None）
+        if not isinstance(intent, dict):
+            logger.warning(
+                f"{step}: LLM 返回非 dict（实际 {type(intent)}），降级为空 intent"
+            )
+            intent = {}
+
+        logger.info(f"{step}: 生成的 intent keys = {list(intent.keys())}")
+        writer({"type": "progress", "step": step, "status": "success"})
+        return {"query_intent": intent}
+
+    except Exception as e:
+        logger.error(f"{step} failed: {e}")
+        writer({"type": "progress", "step": step, "status": "error"})
+        # 失败时返回空 intent（generate_sql 节点会用 SELECT 1 兜底）
+        return {"query_intent": {}}

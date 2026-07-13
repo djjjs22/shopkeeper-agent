@@ -3,7 +3,7 @@
 
 使用 LangGraph 把问数智能体的各个节点串成一条可观测的执行链路
 
-链路结构（刀1 加了意图分类 + 查询改写前置）：
+链路结构（2026-07-14 改造后：LLM 角色压缩 + 实体/条件/维度继承）：
 
   START → classify_intent
         ├─(chitchat)──────────────→ respond_chitchat → END
@@ -13,8 +13,15 @@
                                       → merge_retrieved_info
                                       → filter_table / filter_metric（并行）
                                       → add_extra_context
-                                      → generate_sql → validate_sql
+                                      → generate_intent          [LLM 节点，输出结构化 JSON intent]
+                                      → generate_sql            [纯渲染，不再调 LLM]
+                                      → validate_sql
                                       → (correct_sql →) run_sql → END
+
+关键设计变更（2026-07-14 RFC 刀1）：
+1. 新增 generate_intent 节点：让 LLM 干语义层（输出 JSON），不写 SQL 语法
+2. generate_sql 节点改纯渲染：用 jinja2 模板把 JSON 渲染成 SQL
+3. rewrite_query 节点扩 inherited_from_history 输出（实体/条件/维度继承）
 
 意图分类让闲聊和元数据查询短路，只有真正的数据查询才走完整 RAG 链路。
 """
@@ -31,6 +38,7 @@ from app.agent.nodes.correct_sql import correct_sql
 from app.agent.nodes.extract_keywords import extract_keywords
 from app.agent.nodes.filter_metric import filter_metric
 from app.agent.nodes.filter_table import filter_table
+from app.agent.nodes.generate_intent import generate_intent
 from app.agent.nodes.generate_sql import generate_sql
 from app.agent.nodes.merge_retrieved_info import merge_retrieved_info
 from app.agent.nodes.recall_column import recall_column
@@ -77,6 +85,8 @@ graph_builder.add_node("merge_retrieved_info", merge_retrieved_info)
 graph_builder.add_node("filter_metric", filter_metric)
 graph_builder.add_node("filter_table", filter_table)
 graph_builder.add_node("add_extra_context", add_extra_context)
+# 2026-07-14 改造：拆 generate_sql 为 LLM（generate_intent）+ 渲染（generate_sql）
+graph_builder.add_node("generate_intent", generate_intent)
 graph_builder.add_node("generate_sql", generate_sql)
 graph_builder.add_node("validate_sql", validate_sql)
 graph_builder.add_node("correct_sql", correct_sql)
@@ -127,7 +137,9 @@ graph_builder.add_edge("merge_retrieved_info", "filter_metric")
 # 表和指标都过滤完成后，统一补充生成 SQL 所需的上下文
 graph_builder.add_edge("filter_table", "add_extra_context")
 graph_builder.add_edge("filter_metric", "add_extra_context")
-graph_builder.add_edge("add_extra_context", "generate_sql")
+# 2026-07-14 改造：add_extra_context → generate_intent（LLM 干语义层）→ generate_sql（纯渲染）
+graph_builder.add_edge("add_extra_context", "generate_intent")
+graph_builder.add_edge("generate_intent", "generate_sql")
 graph_builder.add_edge("generate_sql", "validate_sql")
 
 # SQL 校验通过就直接执行，校验失败则先进入修正节点
