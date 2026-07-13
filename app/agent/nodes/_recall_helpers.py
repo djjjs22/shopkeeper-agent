@@ -38,6 +38,13 @@ async def expand_keywords_with_llm(
 ) -> list[str]:
     """用 LLM 把用户原始问题扩展成指定维度的检索词列表
 
+    改前（2026-07-14 P1 前）：
+      只把原始 query 喂给 LLM，LLM 自己"猜"业务同义词（"销售额"是不是"GMV"），猜错率高。
+    改后（2026-07-14 P1）：
+      先用 synonyms_service.expand_query() 把 query 里的同义词扩展出来
+      （"销售额" → "销售额 GMV 营业额 成交总额 order_amount"），
+      再喂给 LLM。LLM 看到的是已经扩展的 query，扩展关键词时不会再漏别名。
+
     Args:
         prompt_name: 扩展 prompt 文件名（不带 .prompt 后缀），
             如 "extend_keywords_for_column_recall"
@@ -47,6 +54,16 @@ async def expand_keywords_with_llm(
         LLM 生成的关键词列表（JSON 数组）。LLM 输出异常时降级为空列表，
         不阻断后续基于通用关键词的召回。
     """
+    # ── P1 改造：先用同义词服务扩展 query ──
+    # 导入放在函数内（避免循环依赖）
+    from app.services.synonyms_service import expand_query
+
+    expanded_query = expand_query(query)
+    logger.debug(
+        f"[expand_keywords_with_llm:{prompt_name}] 同义词扩展: "
+        f"{query!r} → {expanded_query!r}"
+    )
+
     prompt = PromptTemplate(
         template=load_prompt(prompt_name),
         input_variables=["query"],
@@ -56,7 +73,8 @@ async def expand_keywords_with_llm(
     chain = prompt | llm | SafeJsonOutputParser()
 
     try:
-        result = await chain.ainvoke({"query": query})
+        # 用扩展后的 query 喂给 LLM（不是原始 query）
+        result = await chain.ainvoke({"query": expanded_query})
         # 防御性：LLM 偶发输出非 list 时降级为空，避免下游崩溃
         if not isinstance(result, list):
             logger.warning(
