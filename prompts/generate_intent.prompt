@@ -62,14 +62,6 @@
   - conditions（条件）→ 直接拼到 where 数组
   - dimensions（维度）→ 加到 group_by 或 select 里
 
-业务规则引擎匹配（2026-07-14 P2 新增）：
-{business_rules}
-- 如果是"无"：query 里没匹配到任何业务规则，where 条件由 LLM 自己拼
-- 如果有规则：**必须直接使用列出的 WHERE 条件，不要改写**
-  例：规则说"已付款订单" = (fo.status = 'paid' AND fo.paid_at IS NOT NULL)
-      那 where 数组里就要有这个完整表达式，不要写成 status='completed'
-- 规则没覆盖到的部分（额外的时间/地区/枚举值）才用 LLM 拼
-
 【示例 1：单表聚合 + 显式时间范围】
 用户查询：上个月华北销售额是多少？
 查询改写结果：原始表达: 上一个自然月，起止日期: 2025-12-01 至 2025-12-31

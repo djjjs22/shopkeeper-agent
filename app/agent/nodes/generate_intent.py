@@ -90,11 +90,12 @@ def _format_business_rules_for_prompt(query: str) -> str:
     改前：所有 WHERE 条件靠 LLM 拼，业务规则（如"已付款"=什么状态）容易拼错。
     改后：先在 Python 里匹配业务规则，把 WHERE 条件直接喂给 LLM。
          LLM 必须**直接用**这些条件，不准改写（prompt 里会强调）。
-    """
-    # 延迟导入（避免循环依赖）
-    from app.services.rule_service import format_for_prompt
 
-    return format_for_prompt(query)
+    2026-07-15 P2 废弃：远端 schema_resolver 提供更深的表字段查询能力，
+    业务规则改成"在 metric_resolver 里查"。删掉 rule_service 后本函数固定返回"无"，
+    保留函数定义只是为了让 generate_intent 的 prompt 变量 `business_rules` 不报错。
+    """
+    return "无"
 
 
 # ─────────────────────────────────────────────────────────────────────
