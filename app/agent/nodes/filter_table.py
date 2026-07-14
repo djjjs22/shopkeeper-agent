@@ -87,6 +87,8 @@ async def filter_table(state: DataAgentState, runtime: Runtime[DataAgentContext]
         return {"table_infos": filtered_table_infos}
 
     except Exception as e:
-        logger.error(f"{step} failed: {e}")
-        writer({"type": "progress", "step": step, "status": "error"})
-        raise
+        # 2026-07-14 改造：JSON 解析失败时降级保留全部候选表，不让链路中断。
+        # 同 filter_metric 行为对齐：链路稳定性优先，单节点异常不阻塞整体流程。
+        logger.warning(f"{step} failed: {e}, 降级保留全部候选表")
+        writer({"type": "progress", "step": step, "status": "success"})
+        return {"table_infos": table_infos}

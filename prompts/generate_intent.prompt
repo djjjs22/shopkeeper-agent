@@ -9,14 +9,14 @@
 5. 如果【可参考的指标信息】里有相关指标定义，必须用指标定义里"relevance_columns"指定的字段名，不要自己造。
 
 【JSON 结构示例】
-{
+{{
   "select": [
-    {"expr": "SUM(fo.order_amount)", "alias": "销售额"}
+    {{"expr": "SUM(fo.order_amount)", "alias": "销售额"}}
   ],
   "from": "fact_order fo",
   "joins": [
-    {"type": "INNER", "table": "dim_region dr", "on": "fo.region_id = dr.region_id"},
-    {"type": "INNER", "table": "dim_date dd", "on": "fo.order_date = dd.full_date"}
+    {{"type": "INNER", "table": "dim_region dr", "on": "fo.region_id = dr.region_id"}},
+    {{"type": "INNER", "table": "dim_date dd", "on": "fo.order_date = dd.full_date"}}
   ],
   "where": [
     "dr.region_name = '华北'",
@@ -25,12 +25,12 @@
   "group_by": [],
   "order_by": [],
   "limit": null
-}
+}}
 
 【字段说明】
-- select: 数组，每个元素是 {expr, alias}。expr 是表达式（列名或聚合），alias 是结果列别名
+- select: 数组，每个元素是 {{expr, alias}}。expr 是表达式（列名或聚合），alias 是结果列别名
 - from: 主表（含别名），如 "fact_order fo"
-- joins: 数组，每个元素是 {type, table, on}。type 可选 INNER/LEFT/RIGHT，默认 INNER
+- joins: 数组，每个元素是 {{type, table, on}}。type 可选 INNER/LEFT/RIGHT，默认 INNER
 - where: 字符串数组，每个元素是一个完整的 WHERE 条件
 - group_by: 字符串数组，每个元素是一个 GROUP BY 字段
 - order_by: 字符串数组，每个元素是一个 ORDER BY 字段或 "列名 DESC"
@@ -75,11 +75,11 @@
 查询改写结果：原始表达: 上一个自然月，起止日期: 2025-12-01 至 2025-12-31
 从历史继承的上下文：无
 JSON：
-{
-  "select": [{"expr": "SUM(fo.order_amount)", "alias": "销售额"}],
+{{
+  "select": [{{"expr": "SUM(fo.order_amount)", "alias": "销售额"}}],
   "from": "fact_order fo",
   "joins": [
-    {"type": "INNER", "table": "dim_region dr", "on": "fo.region_id = dr.region_id"}
+    {{"type": "INNER", "table": "dim_region dr", "on": "fo.region_id = dr.region_id"}}
   ],
   "where": [
     "dr.region_name = '华北'",
@@ -88,40 +88,40 @@ JSON：
   "group_by": [],
   "order_by": [],
   "limit": null
-}
+}}
 
 【示例 2：多表 JOIN + 分组聚合】
 用户查询：各商品品类的销售额排名情况是怎样的？
 查询改写结果：无
 从历史继承的上下文：无
 JSON：
-{
+{{
   "select": [
-    {"expr": "dp.category", "alias": "商品品类"},
-    {"expr": "SUM(fo.order_amount)", "alias": "销售额"}
+    {{"expr": "dp.category", "alias": "商品品类"}},
+    {{"expr": "SUM(fo.order_amount)", "alias": "销售额"}}
   ],
   "from": "fact_order fo",
   "joins": [
-    {"type": "INNER", "table": "dim_product dp", "on": "fo.product_id = dp.product_id"}
+    {{"type": "INNER", "table": "dim_product dp", "on": "fo.product_id = dp.product_id"}}
   ],
   "where": [],
   "group_by": ["dp.category"],
   "order_by": ["销售额 DESC"],
   "limit": null
-}
+}}
 
 【示例 3：多维度筛选 + 指标口径对齐】
 用户查询：华南地区黄金会员的客户在今年Q1的GMV是多少？
 查询改写结果：无
 从历史继承的上下文：无
 JSON：
-{
-  "select": [{"expr": "SUM(fo.order_amount)", "alias": "GMV"}],
+{{
+  "select": [{{"expr": "SUM(fo.order_amount)", "alias": "GMV"}}],
   "from": "fact_order fo",
   "joins": [
-    {"type": "INNER", "table": "dim_region dr", "on": "fo.region_id = dr.region_id"},
-    {"type": "INNER", "table": "dim_customer dc", "on": "fo.customer_id = dc.customer_id"},
-    {"type": "INNER", "table": "dim_date dd", "on": "fo.order_date = dd.full_date"}
+    {{"type": "INNER", "table": "dim_region dr", "on": "fo.region_id = dr.region_id"}},
+    {{"type": "INNER", "table": "dim_customer dc", "on": "fo.customer_id = dc.customer_id"}},
+    {{"type": "INNER", "table": "dim_date dd", "on": "fo.order_date = dd.full_date"}}
   ],
   "where": [
     "dr.region_name = '华南'",
@@ -132,22 +132,22 @@ JSON：
   "group_by": [],
   "order_by": [],
   "limit": null
-}
+}}
 
 【示例 4：枚举值 WHERE 子句】
 用户查询：微信支付的订单总额
 查询改写结果：无
 从历史继承的上下文：无
 JSON：
-{
-  "select": [{"expr": "SUM(fo.order_amount)", "alias": "订单总额"}],
+{{
+  "select": [{{"expr": "SUM(fo.order_amount)", "alias": "订单总额"}}],
   "from": "fact_order fo",
   "joins": [],
   "where": ["fo.payment_method = '微信'"],
   "group_by": [],
   "order_by": [],
   "limit": null
-}
+}}
 
 【示例 5：追问 + 历史继承】
 历史对话：
@@ -157,21 +157,21 @@ JSON：
 查询改写结果：无
 从历史继承的上下文：实体: ["SKU1", "SKU2", "SKU3"]; 维度: ["省份"]
 JSON：
-{
+{{
   "select": [
-    {"expr": "dr.province", "alias": "省份"},
-    {"expr": "SUM(fo.order_amount)", "alias": "销售额"}
+    {{"expr": "dr.province", "alias": "省份"}},
+    {{"expr": "SUM(fo.order_amount)", "alias": "销售额"}}
   ],
   "from": "fact_order fo",
   "joins": [
-    {"type": "INNER", "table": "dim_product dp", "on": "fo.product_id = dp.product_id"},
-    {"type": "INNER", "table": "dim_region dr", "on": "fo.region_id = dr.region_id"}
+    {{"type": "INNER", "table": "dim_product dp", "on": "fo.product_id = dp.product_id"}},
+    {{"type": "INNER", "table": "dim_region dr", "on": "fo.region_id = dr.region_id"}}
   ],
   "where": ["dp.sku IN ('SKU1', 'SKU2', 'SKU3')"],
   "group_by": ["dr.province"],
   "order_by": ["销售额 DESC"],
   "limit": null
-}
+}}
 
 【安全约束】
 - 只输出 JSON，不输出任何 SQL 关键字

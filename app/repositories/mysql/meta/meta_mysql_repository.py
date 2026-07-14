@@ -8,6 +8,8 @@ Repository 自身只关心“如何写入”，而“哪些写操作要放在同
 问数链路运行时也会从这里读取元数据，用来把召回到的 id 补齐成完整实体
 """
 
+import json
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +23,36 @@ from app.repositories.mysql.meta.mappers.column_info_mapper import ColumnInfoMap
 from app.repositories.mysql.meta.mappers.column_metric_mapper import ColumnMetricMapper
 from app.repositories.mysql.meta.mappers.metric_info_mapper import MetricInfoMapper
 from app.repositories.mysql.meta.mappers.table_info_mapper import TableInfoMapper
+
+
+def _normalize_column_info_row(row: dict) -> ColumnInfo:
+    """把 column_info 查询结果标准化为 ColumnInfo 实体。
+
+    背景：
+    - column_info.examples 和 column_info.alias 在 MySQL 里是 JSON 类型字段。
+    - SQLAlchemy 从不同驱动/不同查询路径取出来时，可能已经是 list，
+      也可能还是 JSON 字符串，例如 '["微信支付", "支付宝"]'。
+    - 下游 merge_retrieved_info 节点会执行 examples.append(value)。
+      如果 examples 还是 str，就会触发：'str' object has no attribute 'append'。
+
+    处理策略：
+    - 每次从 column_info 表批量查询字段元数据时，统一把 examples/alias 转回 list。
+    - 如果 JSON 内容异常，降级为空 list，避免整条问数链路因为单个脏字段中断。
+    - 只在 Repository 出口做一次标准化，保证后续 Agent 节点拿到的数据结构稳定。
+    """
+
+    data = dict(row)
+
+    for key in ("examples", "alias"):
+        value = data.get(key)
+
+        if isinstance(value, str):
+            try:
+                data[key] = json.loads(value)
+            except json.JSONDecodeError:
+                data[key] = []
+
+    return ColumnInfo(**data)
 
 
 class MetaMySQLRepository:
@@ -84,7 +116,7 @@ class MetaMySQLRepository:
         # :table_id 是 SQLAlchemy text SQL 的占位符，实际值通过第二个参数传入
         result = await self.session.execute(text(sql), {"table_id": table_id})
         # mappings() 会把结果行转成类似字典的结构，便于解包成 ColumnInfo
-        return [ColumnInfo(**dict(row)) for row in result.mappings().fetchall()]
+        return [_normalize_column_info_row(row) for row in result.mappings().fetchall()]
 
     async def get_column_infos_by_ids(self, ids: list[str]) -> list[ColumnInfo]:
         """按多个字段 id 批量查询，避免合并阶段 N+1 串行查询（刀 15）"""
@@ -94,7 +126,7 @@ class MetaMySQLRepository:
         sql = "select * from column_info where id in :ids"
         # 传入 tuple，SQLAlchemy 会自动展开为 IN 占位符列表
         result = await self.session.execute(text(sql), {"ids": tuple(ids)})
-        return [ColumnInfo(**dict(row)) for row in result.mappings().fetchall()]
+        return [_normalize_column_info_row(row) for row in result.mappings().fetchall()]
 
     async def get_table_infos_by_ids(self, ids: list[str]) -> list[TableInfo]:
         """按多个表 id 批量查询，避免合并阶段 N+1 串行查询（刀 15）"""
@@ -120,7 +152,7 @@ class MetaMySQLRepository:
             "and role in ('primary_key','foreign_key')"
         )
         result = await self.session.execute(text(sql), {"table_ids": tuple(table_ids)})
-        return [ColumnInfo(**dict(row)) for row in result.mappings().fetchall()]
+        return [_normalize_column_info_row(row) for row in result.mappings().fetchall()]
 
     async def get_all_table_infos(self) -> list[TableInfo]:
         """查询所有表元数据，供元数据查询短路节点（respond_metadata）使用"""
@@ -131,7 +163,7 @@ class MetaMySQLRepository:
         """查询指定表的所有字段，供元数据查询短路节点使用"""
         sql = "select * from column_info where table_id = :table_id"
         result = await self.session.execute(text(sql), {"table_id": table_id})
-        return [ColumnInfo(**dict(row)) for row in result.mappings().fetchall()]
+        return [_normalize_column_info_row(row) for row in result.mappings().fetchall()]
 
     async def get_all_metric_infos(self) -> list[MetricInfo]:
         """查询所有指标元数据，供元数据查询短路节点使用"""
