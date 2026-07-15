@@ -88,9 +88,9 @@ from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from loguru import logger
 
 from app.scripts.archive_sessions import archive_old_sessions
+from app.core.log import logger
 
 # 模块级单例（跟 redis_client_manager 同样的模式）
 _scheduler: Optional[AsyncIOScheduler] = None

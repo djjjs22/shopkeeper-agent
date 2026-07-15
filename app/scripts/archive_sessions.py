@@ -15,10 +15,9 @@ import json
 import sys
 from datetime import datetime, timedelta
 
-from loguru import logger
-
 from app.clients.mysql_client_manager import meta_mysql_client_manager
 from app.clients.redis_client_manager import redis_client_manager
+from app.core.log import logger
 
 
 async def archive_old_sessions(days_threshold: int = 7) -> int:

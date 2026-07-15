@@ -77,9 +77,8 @@ import os
 from enum import Enum
 from typing import Dict, List
 
-from loguru import logger
-
 from app.clients.redis_client_manager import redis_client_manager
+from app.core.log import logger
 from app.conf.app_config import app_config
 
 redis_cfg = app_config.redis_cfg

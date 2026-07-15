@@ -98,9 +98,9 @@ import asyncio
 from typing import Optional
 
 import redis.asyncio as redis_async
-from loguru import logger
 
 from app.conf.app_config import app_config
+from app.core.log import logger
 
 redis_cfg = app_config.redis_cfg
 
