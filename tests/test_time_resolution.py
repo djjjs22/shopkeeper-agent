@@ -132,7 +132,7 @@ _resolve_relative_time = _namespace["_resolve_relative_time"]
 # ─────────────────────────────────────────────────────────────────────
 # 测试 case
 # ─────────────────────────────────────────────────────────────────────
-def test_case(label: str, query: str, mock_today: date, expect_start: str, expect_end: str):
+def _test_case(label: str, query: str, mock_today: date, expect_start: str, expect_end: str):
     """通用测试：mock today + 跑 _resolve_relative_time + 验证 start/end
 
     通过在 namespace 里覆盖 `date` 名字来 mock 当前日期。
@@ -196,7 +196,7 @@ def run_all():
 
     passed = 0
     for label, query, mock_today, expect_start, expect_end in cases:
-        if test_case(label, query, mock_today, expect_start, expect_end):
+        if _test_case(label, query, mock_today, expect_start, expect_end):
             passed += 1
 
     total = len(cases)

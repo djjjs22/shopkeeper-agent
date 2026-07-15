@@ -35,7 +35,7 @@ def _load_module():
     return mod
 
 
-def test_case(label: str, intent: dict, expect: str):
+def _test_case(label: str, intent: dict, expect: str):
     """通用测试：渲染 SQL，验证包含 expect 字符串"""
     mod = _load_module()
     sql = mod.render_sql(intent)
@@ -143,7 +143,7 @@ def run_all():
 
     passed = 0
     for label, intent, expect in cases:
-        if test_case(label, intent, expect):
+        if _test_case(label, intent, expect):
             passed += 1
 
     total = len(cases)
