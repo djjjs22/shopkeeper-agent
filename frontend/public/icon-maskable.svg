@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PWA maskable 图标（带安全区，可被 OS 裁切成各种形状）
+  - 内边距至少 12.5%，核心元素放在中心 75% 区域
+  - 背景满铺 moss 色，前景缩小到中心
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <rect width="192" height="192" fill="#2f6b4f"/>
+  <g transform="translate(64,64)" fill="none" stroke="#f7f1e8" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="0" y1="48" x2="64" y2="48" />
+    <rect x="4" y="28" width="14" height="20" />
+    <rect x="25" y="14" width="14" height="34" />
+    <rect x="46" y="36" width="14" height="12" />
+  </g>
+</svg>

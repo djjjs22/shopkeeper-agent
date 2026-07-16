@@ -1,9 +1,9 @@
 /**
  * 聊天输入区组件
- * 处理问题输入、发送和停止当前流式请求
+ * 处理问题输入、发送、停止流式、自动高度、键盘快捷键
  */
 import { ArrowUp, Square, WandSparkles } from "lucide-react";
-import { FormEvent, KeyboardEvent, useRef } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useRef } from "react";
 import { cn } from "../lib/format";
 
 type ComposerProps = {
@@ -25,15 +25,44 @@ export function Composer({
 }: ComposerProps) {
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
+    // 输入框自动高度增长：根据 scrollHeight 动态设置
+    // 先重置为 auto 才能拿到正确的 scrollHeight（防止只增不减）
+    useEffect(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.style.height = "auto";
+        // max-h-36 = 144px，超过则滚动
+        el.style.height = `${Math.min(el.scrollHeight, 144)}px`;
+    }, [value]);
+
+    // 全局快捷键：Ctrl/Cmd+K 聚焦输入框（任何位置都能触发）
+    useEffect(() => {
+        const onKey = (event: globalThis.KeyboardEvent) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === "k") {
+                event.preventDefault();
+                textareaRef.current?.focus();
+            }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, []);
+
     const submit = (event: FormEvent) => {
         event.preventDefault();
         if (!disabled) onSubmit();
     };
 
     const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+        // Enter 发送，Shift+Enter 换行
         if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
             if (!disabled) onSubmit();
+            return;
+        }
+        // Esc 停止流式响应（仅在流式中生效）
+        if (event.key === "Escape" && isStreaming) {
+            event.preventDefault();
+            onStop();
         }
     };
 
@@ -52,8 +81,8 @@ export function Composer({
                     onChange={(event) => onChange(event.target.value)}
                     onKeyDown={onKeyDown}
                     rows={1}
-                    placeholder="问一个电商数据问题..."
-                    className="max-h-36 min-h-11 flex-1 resize-none bg-transparent px-2 py-3 text-[15px] leading-6 text-ink outline-none placeholder:text-ink/35"
+                    placeholder="问一个电商数据问题... (Enter 发送 · Shift+Enter 换行 · Esc 停止)"
+                    className="max-h-36 min-h-11 flex-1 resize-none overflow-y-auto bg-transparent px-2 py-3 text-[15px] leading-6 text-ink outline-none placeholder:text-ink/35"
                 />
                 <button
                     type={isStreaming ? "button" : "submit"}
@@ -65,7 +94,7 @@ export function Composer({
                             ? "bg-tomato hover:bg-tomato/90"
                             : "bg-ink hover:bg-soot disabled:cursor-not-allowed disabled:bg-ink/25",
                     )}
-                    title={isStreaming ? "停止" : "发送"}
+                    title={isStreaming ? "停止 (Esc)" : "发送 (Enter)"}
                     aria-label={isStreaming ? "停止" : "发送"}
                 >
                     {isStreaming ? (

@@ -2,6 +2,7 @@
  * 首页空状态组件
  * 展示产品入口信息和可点击的示例问数问题
  */
+import { memo } from "react";
 import { LineChart, Search, ShoppingBag, Sparkles } from "lucide-react";
 
 type EmptyStateProps = {
@@ -15,7 +16,7 @@ const highlights = [
   { label: "电商数仓", icon: ShoppingBag },
 ];
 
-export function EmptyState({ examples, onUseExample }: EmptyStateProps) {
+function EmptyStateImpl({ examples, onUseExample }: EmptyStateProps) {
   return (
     <div className="mx-auto flex min-h-full max-w-5xl flex-col justify-center px-4 py-12">
       <div className="mb-10 max-w-3xl">
@@ -55,3 +56,7 @@ export function EmptyState({ examples, onUseExample }: EmptyStateProps) {
     </div>
   );
 }
+
+// React.memo：examples 数组引用不变 + onUseExample 引用不变时不重渲染
+// App 层 useCallback 包裹 onUseExample 才能发挥 memo 效果
+export const EmptyState = memo(EmptyStateImpl);

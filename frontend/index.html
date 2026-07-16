@@ -1,13 +1,23 @@
 <!--
   Vite HTML 模板
-  声明页面元信息并挂载 React 应用入口
+  声明页面元信息、PWA 资源并挂载 React 应用入口
 -->
 <!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f7f1e8" />
+    <meta name="theme-color" content="#2f6b4f" />
+    <meta name="description" content="用中文问数电商数据，秒级返回带口径的答案" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="电商问数" />
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+
     <title>电商问数 | Shopkeeper Agent</title>
   </head>
   <body>

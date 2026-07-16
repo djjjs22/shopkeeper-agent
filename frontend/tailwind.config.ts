@@ -31,6 +31,16 @@ export default {
         line: "0 1px 0 rgba(32, 32, 29, 0.08)",
         panel: "0 24px 70px rgba(45, 41, 37, 0.16)",
       },
+      keyframes: {
+        // Toast 进度条：从 100% 缩到 0%（横向收缩）
+        "toast-progress": {
+          from: { transform: "scaleX(1)" },
+          to: { transform: "scaleX(0)" },
+        },
+      },
+      animation: {
+        "toast-progress": "toast-progress linear forwards",
+      },
     },
   },
   plugins: [],

@@ -1,0 +1,36 @@
+{
+  "name": "电商问数 · Shopkeeper Agent",
+  "short_name": "电商问数",
+  "description": "用中文问数电商数据，秒级返回带口径的答案（基于 LangGraph + FastAPI SSE）",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f7f1e8",
+  "theme_color": "#2f6b4f",
+  "lang": "zh-CN",
+  "categories": ["productivity", "business", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "新会话",
+      "short_name": "新会话",
+      "description": "清空当前对话，开启新会话",
+      "url": "/?action=new",
+      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    }
+  ]
+}

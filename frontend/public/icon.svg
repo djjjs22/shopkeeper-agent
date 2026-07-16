@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PWA 应用图标（普通方形）
+  - 主色 moss 绿 (#2f6b4f)
+  - 前景：bar-chart3 图标 + 购物车混合
+  - 设计参考 lucide BarChart3
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <rect width="192" height="192" rx="24" fill="#2f6b4f"/>
+  <g transform="translate(48,48)" fill="none" stroke="#f7f1e8" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="0" y1="80" x2="96" y2="80" />
+    <rect x="6" y="46" width="20" height="34" />
+    <rect x="38" y="22" width="20" height="58" />
+    <rect x="70" y="58" width="20" height="22" />
+  </g>
+</svg>

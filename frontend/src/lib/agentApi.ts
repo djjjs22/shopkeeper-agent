@@ -6,6 +6,19 @@ import type { AgentEvent } from "../types/agent";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
 
+/**
+ * API 错误：携带 HTTP 状态码，让前端能映射到友好提示
+ * 字段 `status` 用于 errorMessages.mapHttpError 分类
+ */
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 type QueryOptions = {
   signal?: AbortSignal;
   onEvent: (event: AgentEvent) => void;
@@ -23,7 +36,17 @@ export async function streamQuery(query: string, options: QueryOptions) {
   });
 
   if (!response.ok) {
-    throw new Error(`接口请求失败：HTTP ${response.status}`);
+    // 尝试读后端返回的错误体作为补充信息
+    let bodyText = "";
+    try {
+      bodyText = await response.text();
+    } catch {
+      // 读不到 body 也无所谓
+    }
+    throw new ApiError(
+      bodyText || `接口请求失败：HTTP ${response.status}`,
+      response.status,
+    );
   }
 
   if (!response.body) {
@@ -68,7 +91,7 @@ export async function clearSession() {
     headers: { Accept: "application/json" },
   });
   if (!response.ok) {
-    throw new Error(`清空会话失败：HTTP ${response.status}`);
+    throw new ApiError(`清空会话失败：HTTP ${response.status}`, response.status);
   }
   return response.json();
 }

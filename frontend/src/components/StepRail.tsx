@@ -2,6 +2,7 @@
  * 智能体执行流程组件
  * 按后端 SSE 推送的步骤顺序，以带序号的流式文本展示
  */
+import { memo } from "react";
 import { Check, Circle, LoaderCircle, X } from "lucide-react";
 import { cn } from "../lib/format";
 import type { ProgressStatus, StepState } from "../types/agent";
@@ -19,7 +20,7 @@ function NodeIcon({ status }: { status: ProgressStatus | "pending" }) {
   return <Circle className="h-3 w-3" aria-hidden="true" />;
 }
 
-export function StepRail({ steps = [] }: { steps?: StepState[] }) {
+function StepRailImpl({ steps = [] }: { steps?: StepState[] }) {
   if (steps.length === 0) return null;
 
   // 按 updatedAt 排序，保持步骤出现顺序
@@ -67,3 +68,7 @@ export function StepRail({ steps = [] }: { steps?: StepState[] }) {
     </section>
   );
 }
+
+// React.memo：steps 数组引用不变时不重渲染
+// 流式响应中本组件被频繁更新，memo 可避免重渲染时不必要的子树重建
+export const StepRail = memo(StepRailImpl);
