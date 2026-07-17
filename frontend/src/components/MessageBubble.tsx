@@ -1,6 +1,10 @@
 /**
  * 聊天消息气泡组件
  * 组合展示用户问题、智能体回复、执行流程和结果表格
+ *
+ * 设计：
+ * - 用户气泡：iMessage 蓝色渐变 + Squircle 大圆角 + 苹果蓝阴影（Apple HIG 标准）
+ * - 助手气泡：白/70 玻璃 + hairline 边 + Squircle 大圆角（Block Studio 美学）
  */
 import { memo } from "react";
 import { Bot, Copy, RefreshCcw, UserRound } from "lucide-react";
@@ -57,7 +61,13 @@ function MessageBubbleImpl({
   return (
     <article className={cn("group flex gap-3", isUser && "justify-end")}>
       {!isUser && (
-        <div className="mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gray-900 dark:bg-white dark:bg-gray-900 text-white">
+        <div
+          className="mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-white shadow-sm"
+          style={{
+            backgroundImage:
+              "linear-gradient(135deg, #48484A 0%, #1C1C1E 100%)",
+          }}
+        >
           <Bot className="h-4 w-4" aria-hidden="true" />
         </div>
       )}
@@ -65,11 +75,22 @@ function MessageBubbleImpl({
       <div className={cn("max-w-[920px] flex-1", isUser && "flex max-w-[760px] justify-end")}>
         <div
           className={cn(
-            "relative border px-5 py-4 shadow-sm",
+            // 用户气泡：iMessage 蓝渐变 + Squircle 大圆角 + 苹果蓝色阴影
+            // 助手气泡：白/70 玻璃 + hairline 边 + Squircle 大圆角 + 苹果黑色阴影
+            "relative px-5 py-4 transition-shadow",
             isUser
-              ? "border-gray-900/10 dark:border-white/10 bg-gray-900 dark:bg-gray-900 text-white"
-              : "border-black/5 dark:border-white/10 bg-white/80 dark:bg-gray-900/70 text-gray-900 dark:text-white backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.04)]",
+              ? "rounded-2xl rounded-br-md border border-apple-blue/40 text-white shadow-[0_8px_24px_rgba(0,113,227,0.25)] hover:shadow-[0_10px_28px_rgba(0,113,227,0.30)]"
+              : "rounded-2xl rounded-bl-md border border-black/5 bg-white/80 text-gray-900 shadow-[0_8px_24px_rgba(0,0,0,0.04)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5 dark:text-white",
           )}
+          style={
+            isUser
+              ? {
+                  // iMessage 蓝色渐变（用 inline style 兜底，保证 100% 渲染）
+                  backgroundImage:
+                    "linear-gradient(135deg, #0071e3 0%, #0077ed 100%)",
+                }
+              : undefined
+          }
         >
           <div className="flex items-start justify-between gap-3">
             <p className="whitespace-pre-wrap text-[15px] leading-7">{message.content}</p>
@@ -77,7 +98,7 @@ function MessageBubbleImpl({
               <button
                 type="button"
                 onClick={copy}
-                className="shrink-0 rounded-full p-1.5 text-gray-500 dark:text-gray-400 opacity-0 outline-none transition hover:bg-black/5 dark:bg-white dark:bg-gray-900/8 hover:text-gray-900 dark:text-white focus:opacity-100 focus:ring-2 focus:ring-apple-blue/40 group-hover:opacity-100"
+                className="shrink-0 rounded-full p-1.5 text-gray-500 opacity-0 outline-none transition hover:bg-black/5 hover:text-gray-900 focus:opacity-100 focus:ring-2 focus:ring-apple-blue/40 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white"
                 title="复制"
                 aria-label="复制"
               >
@@ -88,7 +109,7 @@ function MessageBubbleImpl({
               <button
                 type="button"
                 onClick={retry}
-                className="shrink-0 rounded-full p-1.5 text-white/70 opacity-0 outline-none transition hover:bg-white dark:bg-gray-900 dark:bg-gray-900/10 hover:text-white focus:opacity-100 focus:ring-2 focus:ring-parchment/40 group-hover:opacity-100"
+                className="shrink-0 rounded-full p-1.5 text-white/70 opacity-0 outline-none transition hover:bg-white/15 hover:text-white focus:opacity-100 focus:ring-2 focus:ring-white/40 group-hover:opacity-100"
                 title="重新查询"
                 aria-label="重新查询"
               >
@@ -110,17 +131,24 @@ function MessageBubbleImpl({
 
           <div
             className={cn(
-              "mt-3 text-xs",
-              isUser ? "text-white/70" : "text-gray-500 dark:text-gray-400",
+              "mt-2.5 flex items-center gap-1.5 text-[11px] tabular-nums",
+              isUser ? "text-white/75" : "text-gray-400 dark:text-gray-500",
             )}
           >
+            <span className="inline-block h-1 w-1 rounded-full bg-current opacity-50" aria-hidden="true" />
             {formatTime(message.createdAt)}
           </div>
         </div>
       </div>
 
       {isUser && (
-        <div className="mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full bg-apple-blue text-white">
+        <div
+          className="mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-white shadow-sm"
+          style={{
+            backgroundImage:
+              "linear-gradient(135deg, #0071e3 0%, #AF52DE 100%)",
+          }}
+        >
           <UserRound className="h-4 w-4" aria-hidden="true" />
         </div>
       )}
