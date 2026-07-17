@@ -57,6 +57,11 @@ function normalizeRows(data: unknown): Array<Record<string, unknown>> {
 function formatCell(value: unknown) {
   if (value === null || value === undefined) return "-";
   if (typeof value === "object") return JSON.stringify(value);
+  // 数字类型加千分位分隔符（107373 → 107,373），保留原始小数位（41099.5 → 41,099.5）
+  // maximumFractionDigits=20 避免默认的 toLocaleString 把 41099.5 四舍五入成整数
+  if (typeof value === "number") {
+    return value.toLocaleString("en-US", { maximumFractionDigits: 20 });
+  }
   return String(value);
 }
 
