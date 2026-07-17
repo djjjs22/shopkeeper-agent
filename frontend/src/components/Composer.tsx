@@ -75,7 +75,7 @@ export function Composer({
                     onKeyDown={onKeyDown}
                     rows={1}
                     placeholder="问一个电商数据问题..."
-                    className="max-h-36 min-h-10 flex-1 resize-none overflow-y-auto bg-transparent px-2 py-2.5 text-[15px] leading-6 text-gray-900 outline-none placeholder:text-gray-400 dark:text-white"
+                    className="max-h-36 min-h-10 flex-1 resize-none overflow-y-auto bg-transparent px-2 py-2.5 text-[15px] leading-6 text-gray-800 outline-none placeholder:text-gray-400 dark:text-white"
                 />
                 <button
                     type={isStreaming ? "button" : "submit"}

@@ -1,10 +1,11 @@
 /**
- * 最近查询侧栏组件
- * 显示用户最近发起过的 query 列表（持久化在 localStorage）
- * 点击历史项可重新发起问数
+ * 最近查询侧栏组件（Block Studio Apple 风）
+ * - 卡片：白/70 半透明 + backdrop-blur + 圆角 + hairline 边
+ * - hover：边框变 Apple 蓝 + 背景变白 + 微缩放
+ * - leading 图标：搜历史感更强
  */
 import { memo } from "react";
-import { Clock } from "lucide-react";
+import { Clock, MessageSquareText } from "lucide-react";
 
 type RecentHistoryProps = {
   queries: string[];
@@ -21,7 +22,7 @@ function RecentHistoryImpl({ queries, disabled, onUseQuery }: RecentHistoryProps
         <Clock className="h-3.5 w-3.5" aria-hidden="true" />
         最近
       </div>
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         {queries.map((query) => (
           <button
             key={query}
@@ -29,9 +30,10 @@ function RecentHistoryImpl({ queries, disabled, onUseQuery }: RecentHistoryProps
             disabled={disabled}
             onClick={() => onUseQuery(query)}
             title={query}
-            className="w-full truncate border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/80 dark:bg-gray-900/80 px-3 py-2.5 text-left text-sm leading-5 text-gray-700 dark:text-gray-300 transition hover:border-moss/35 hover:bg-white dark:bg-gray-900/90 dark:bg-gray-900/90 disabled:cursor-not-allowed disabled:opacity-55"
+            className="group flex w-full items-center gap-2.5 rounded-xl border border-black/5 bg-white/70 px-3 py-2.5 text-left text-[13px] leading-5 text-gray-700 backdrop-blur-md transition-all duration-200 ease-spring hover:scale-[1.01] hover:border-apple-blue/30 hover:bg-white/90 hover:shadow-sm active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-55 dark:border-white/10 dark:bg-white/5 dark:text-gray-300 dark:hover:border-apple-blue/30 dark:hover:bg-white/10"
           >
-            {query}
+            <MessageSquareText className="h-3.5 w-3.5 shrink-0 text-gray-400 transition-colors group-hover:text-apple-blue dark:text-gray-500" aria-hidden="true" />
+            <span className="truncate">{query}</span>
           </button>
         ))}
       </div>

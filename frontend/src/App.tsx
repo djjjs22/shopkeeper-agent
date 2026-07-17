@@ -362,14 +362,14 @@ export default function App() {
                 <History className="h-3.5 w-3.5" aria-hidden="true" />
                 样例
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 {examples.map((example, idx) => (
                   <button
                     key={example}
                     type="button"
                     disabled={isStreaming}
                     onClick={() => startQueryAndCloseDrawer(example)}
-                    className="group w-full rounded-2xl border border-black/5 bg-gray-100 px-4 py-3 text-left text-[13px] leading-5 text-gray-900 transition-all duration-200 ease-spring hover:bg-gray-200 hover:scale-[1.01] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/5 dark:bg-gray-800 dark:text-white dark:hover:bg-gray-700"
+                    className="group w-full rounded-xl border border-black/5 bg-white/70 px-3.5 py-2.5 text-left text-[13px] leading-5 text-gray-700 backdrop-blur-md transition-all duration-200 ease-spring hover:scale-[1.01] hover:border-apple-blue/30 hover:bg-white/90 hover:shadow-sm active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:bg-white/5 dark:text-gray-300 dark:hover:border-apple-blue/30 dark:hover:bg-white/10"
                     style={{ animationDelay: `${idx * 40}ms` }}
                   >
                     {example}
