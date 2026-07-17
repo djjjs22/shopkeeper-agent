@@ -57,7 +57,7 @@ function MessageBubbleImpl({
   return (
     <article className={cn("group flex gap-3", isUser && "justify-end")}>
       {!isUser && (
-        <div className="mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full bg-ink text-parchment">
+        <div className="mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gray-900 dark:bg-white dark:bg-gray-900 text-white">
           <Bot className="h-4 w-4" aria-hidden="true" />
         </div>
       )}
@@ -65,10 +65,10 @@ function MessageBubbleImpl({
       <div className={cn("max-w-[920px] flex-1", isUser && "flex max-w-[760px] justify-end")}>
         <div
           className={cn(
-            "relative border px-5 py-4 shadow-line",
+            "relative border px-5 py-4 shadow-sm",
             isUser
-              ? "border-ink/80 bg-ink text-parchment"
-              : "border-ink/10 bg-[#fffaf1]/78 text-ink backdrop-blur",
+              ? "border-gray-900 dark:border-gray-200 bg-gray-900 dark:bg-white dark:bg-gray-900 text-white"
+              : "border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/80 dark:bg-gray-800/80 text-gray-900 dark:text-white backdrop-blur",
           )}
         >
           <div className="flex items-start justify-between gap-3">
@@ -77,7 +77,7 @@ function MessageBubbleImpl({
               <button
                 type="button"
                 onClick={copy}
-                className="shrink-0 rounded-full p-1.5 text-ink/45 opacity-0 outline-none transition hover:bg-ink/5 hover:text-ink focus:opacity-100 focus:ring-2 focus:ring-moss/40 group-hover:opacity-100"
+                className="shrink-0 rounded-full p-1.5 text-gray-500 dark:text-gray-400 opacity-0 outline-none transition hover:bg-black/5 dark:bg-white dark:bg-gray-900/8 hover:text-gray-900 dark:text-white focus:opacity-100 focus:ring-2 focus:ring-apple-blue/40 group-hover:opacity-100"
                 title="复制"
                 aria-label="复制"
               >
@@ -88,7 +88,7 @@ function MessageBubbleImpl({
               <button
                 type="button"
                 onClick={retry}
-                className="shrink-0 rounded-full p-1.5 text-parchment/55 opacity-0 outline-none transition hover:bg-parchment/10 hover:text-parchment focus:opacity-100 focus:ring-2 focus:ring-parchment/40 group-hover:opacity-100"
+                className="shrink-0 rounded-full p-1.5 text-white/70 opacity-0 outline-none transition hover:bg-white dark:bg-gray-900 dark:bg-gray-900/10 hover:text-white focus:opacity-100 focus:ring-2 focus:ring-parchment/40 group-hover:opacity-100"
                 title="重新查询"
                 aria-label="重新查询"
               >
@@ -98,7 +98,7 @@ function MessageBubbleImpl({
           </div>
 
           {message.error && (
-            <div className="mt-3 border border-tomato/30 bg-tomato/10 px-3 py-2 text-sm text-tomato">
+            <div className="mt-3 border border-apple-red/30 bg-apple-red/10 px-3 py-2 text-sm text-apple-red">
               {message.error}
             </div>
           )}
@@ -111,7 +111,7 @@ function MessageBubbleImpl({
           <div
             className={cn(
               "mt-3 text-xs",
-              isUser ? "text-parchment/55" : "text-ink/45",
+              isUser ? "text-white/70" : "text-gray-500 dark:text-gray-400",
             )}
           >
             {formatTime(message.createdAt)}
@@ -120,7 +120,7 @@ function MessageBubbleImpl({
       </div>
 
       {isUser && (
-        <div className="mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full bg-moss text-white">
+        <div className="mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full bg-apple-blue text-white">
           <UserRound className="h-4 w-4" aria-hidden="true" />
         </div>
       )}

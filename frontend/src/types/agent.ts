@@ -2,12 +2,12 @@
  * 智能体类型定义
  * 定义问数智能体前端使用的 SSE 事件、流程步骤和聊天消息类型
  */
-export type ProgressStatus = "running" | "success" | "error";
+export type ProgressStatus = "pending" | "running" | "success" | "error";
 
 export type ProgressEvent = {
   type: "progress";
   step: string;
-  status: ProgressStatus;
+  status: Exclude<ProgressStatus, "pending">;
 };
 
 export type ResultEvent = {

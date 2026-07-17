@@ -56,30 +56,30 @@ const STYLE_BY_TYPE: Record<
   success: {
     icon: CheckCircle2,
     ring: "border-moss/35",
-    bg: "bg-moss/10",
-    text: "text-moss",
-    bar: "bg-moss",
+    bg: "bg-apple-blue/10",
+    text: "text-apple-blue",
+    bar: "bg-apple-blue",
   },
   error: {
     icon: XCircle,
-    ring: "border-tomato/35",
-    bg: "bg-tomato/10",
-    text: "text-tomato",
-    bar: "bg-tomato",
+    ring: "border-apple-red/40",
+    bg: "bg-apple-red/10",
+    text: "text-apple-red",
+    bar: "bg-apple-red",
   },
   info: {
     icon: Info,
-    ring: "border-ink/15",
-    bg: "bg-ink/5",
-    text: "text-ink",
-    bar: "bg-ink",
+    ring: "border-gray-200 dark:border-gray-800",
+    bg: "bg-black/5 dark:bg-white dark:bg-gray-900/8",
+    text: "text-gray-900 dark:text-white",
+    bar: "bg-gray-900 dark:bg-white dark:bg-gray-900",
   },
   warning: {
     icon: AlertTriangle,
-    ring: "border-brass/45",
-    bg: "bg-brass/10",
-    text: "text-brass",
-    bar: "bg-brass",
+    ring: "border-amber-500/45",
+    bg: "bg-amber-500/10",
+    text: "text-amber-600 dark:text-amber-400",
+    bar: "bg-amber-500",
   },
 };
 
@@ -113,16 +113,16 @@ function ToastCard({
       role={toast.type === "error" || toast.type === "warning" ? "alert" : "status"}
       aria-live={toast.type === "error" ? "assertive" : "polite"}
       className={cn(
-        "pointer-events-auto flex w-80 items-start gap-3 border bg-white/95 px-4 py-3 shadow-panel backdrop-blur",
+        "pointer-events-auto flex w-80 items-start gap-3 border bg-white dark:bg-gray-900/95 dark:bg-gray-900/95 px-4 py-3 shadow-lg backdrop-blur",
         style.ring,
       )}
     >
       <Icon className={cn("mt-0.5 h-5 w-5 shrink-0", style.text)} aria-hidden="true" />
-      <p className="flex-1 text-sm leading-5 text-ink">{toast.message}</p>
+      <p className="flex-1 text-sm leading-5 text-gray-900 dark:text-white">{toast.message}</p>
       <button
         type="button"
         onClick={handleDismiss}
-        className="shrink-0 rounded-full p-1 text-ink/40 outline-none transition hover:bg-ink/5 hover:text-ink focus:ring-2 focus:ring-moss/40"
+        className="shrink-0 rounded-full p-1 text-gray-900 dark:text-white/40 outline-none transition hover:bg-black/5 dark:bg-white dark:bg-gray-900/8 hover:text-gray-900 dark:text-white focus:ring-2 focus:ring-apple-blue/40"
         title="关闭"
         aria-label="关闭"
       >

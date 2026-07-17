@@ -49,19 +49,19 @@ function DefaultFallback({ error, reset }: { error: Error; reset: () => void }) 
   return (
     <div
       role="alert"
-      className="mx-auto my-12 flex max-w-md flex-col items-center gap-4 border border-tomato/35 bg-tomato/5 px-6 py-8 text-center"
+      className="mx-auto my-12 flex max-w-md flex-col items-center gap-4 border border-apple-red/40 bg-apple-red/5 px-6 py-8 text-center"
     >
-      <div className="grid h-12 w-12 place-items-center rounded-full bg-tomato/15 text-tomato">
+      <div className="grid h-12 w-12 place-items-center rounded-full bg-apple-red/15 text-apple-red">
         <AlertTriangle className="h-6 w-6" aria-hidden="true" />
       </div>
       <div className="space-y-1">
-        <p className="text-base font-semibold text-ink">页面出错了</p>
-        <p className="text-sm text-ink/55">{error.message || "未知错误"}</p>
+        <p className="text-base font-semibold text-gray-900 dark:text-white">页面出错了</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">{error.message || "未知错误"}</p>
       </div>
       <button
         type="button"
         onClick={reset}
-        className="inline-flex items-center gap-2 border border-ink/20 bg-white px-4 py-2 text-sm font-medium text-ink transition hover:bg-ink hover:text-parchment focus:outline-none focus:ring-2 focus:ring-moss/40"
+        className="inline-flex items-center gap-2 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-2 text-sm font-medium text-gray-900 dark:text-white transition hover:bg-gray-900 dark:bg-white dark:bg-gray-900 hover:text-white focus:outline-none focus:ring-2 focus:ring-apple-blue/40"
       >
         <RotateCcw className="h-4 w-4" aria-hidden="true" />
         重试

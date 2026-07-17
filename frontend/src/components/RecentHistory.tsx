@@ -17,7 +17,7 @@ function RecentHistoryImpl({ queries, disabled, onUseQuery }: RecentHistoryProps
 
   return (
     <section>
-      <div className="mb-2 flex items-center gap-2 px-1 text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">
+      <div className="mb-2 flex items-center gap-2 px-1 text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
         <Clock className="h-3.5 w-3.5" aria-hidden="true" />
         最近
       </div>
@@ -29,7 +29,7 @@ function RecentHistoryImpl({ queries, disabled, onUseQuery }: RecentHistoryProps
             disabled={disabled}
             onClick={() => onUseQuery(query)}
             title={query}
-            className="w-full truncate border border-ink/10 bg-white/42 px-3 py-2.5 text-left text-sm leading-5 text-ink/75 transition hover:border-moss/35 hover:bg-white/75 disabled:cursor-not-allowed disabled:opacity-55"
+            className="w-full truncate border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/80 dark:bg-gray-900/80 px-3 py-2.5 text-left text-sm leading-5 text-gray-700 dark:text-gray-300 transition hover:border-moss/35 hover:bg-white dark:bg-gray-900/90 dark:bg-gray-900/90 disabled:cursor-not-allowed disabled:opacity-55"
           >
             {query}
           </button>

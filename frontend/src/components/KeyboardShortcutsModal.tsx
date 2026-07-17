@@ -63,7 +63,7 @@ export function KeyboardShortcutsModal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-40 grid place-items-center bg-ink/45 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-40 grid place-items-center bg-black/45 dark:bg-black/65 p-4 backdrop-blur-sm"
       onClick={onClose}
       role="presentation"
     >
@@ -71,19 +71,19 @@ export function KeyboardShortcutsModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="shortcuts-title"
-        className="w-full max-w-md border border-ink/15 bg-white shadow-panel"
+        className="w-full max-w-md border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-ink/10 px-5 py-4">
-          <div className="flex items-center gap-2 text-base font-semibold text-ink">
-            <Keyboard className="h-4 w-4 text-moss" aria-hidden="true" />
+        <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-800 px-5 py-4">
+          <div className="flex items-center gap-2 text-base font-semibold text-gray-900 dark:text-white">
+            <Keyboard className="h-4 w-4 text-apple-blue" aria-hidden="true" />
             <span id="shortcuts-title">键盘快捷键</span>
           </div>
           <button
             ref={closeBtnRef}
             type="button"
             onClick={onClose}
-            className="grid h-8 w-8 place-items-center rounded-full text-ink/55 transition hover:bg-ink/5 hover:text-ink focus:outline-none focus:ring-2 focus:ring-moss/40"
+            className="grid h-8 w-8 place-items-center rounded-full text-gray-500 dark:text-gray-400 transition hover:bg-black/5 dark:bg-white dark:bg-gray-900/8 hover:text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-apple-blue/40"
             title="关闭 (Esc)"
             aria-label="关闭"
           >
@@ -96,10 +96,10 @@ export function KeyboardShortcutsModal({
               key={shortcut.description}
               className="flex items-center justify-between gap-3 px-3 py-2.5"
             >
-              <span className="text-sm text-ink/75">{shortcut.description}</span>
+              <span className="text-sm text-gray-700 dark:text-gray-300">{shortcut.description}</span>
               <kbd
                 className={cn(
-                  "inline-flex min-w-[3.5rem] items-center justify-center border border-ink/20 bg-parchment/60 px-2 py-1 text-center text-xs font-mono font-medium text-ink/75",
+                  "inline-flex min-w-[3.5rem] items-center justify-center border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 dark:bg-gray-900/60 px-2 py-1 text-center text-xs font-mono font-medium text-gray-700 dark:text-gray-300",
                 )}
               >
                 {mac ? shortcut.keys.mac : shortcut.keys.other}
@@ -107,8 +107,8 @@ export function KeyboardShortcutsModal({
             </li>
           ))}
         </ul>
-        <div className="border-t border-ink/10 bg-parchment/45 px-5 py-2.5 text-center text-xs text-ink/45">
-          按 <kbd className="border border-ink/20 bg-white px-1 py-0.5 font-mono text-[10px]">?</kbd> 随时打开
+        <div className="border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/80 dark:bg-gray-900/80 dark:bg-gray-900/45 px-5 py-2.5 text-center text-xs text-gray-500 dark:text-gray-400">
+          按 <kbd className="border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-1 py-0.5 font-mono text-[10px]">?</kbd> 随时打开
         </div>
       </div>
     </div>,

@@ -14,24 +14,24 @@ import { useToast } from "./Toast";
 function ResultTableSkeleton() {
   return (
     <section
-      className="mt-4 overflow-hidden border border-ink/10 bg-white/70 shadow-line"
+      className="mt-4 overflow-hidden border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/80 dark:bg-gray-900/80 shadow-sm"
       aria-busy="true"
       aria-live="polite"
     >
-      <div className="flex items-center justify-between border-b border-ink/10 px-4 py-3">
-        <div className="flex items-center gap-2 text-sm font-semibold text-ink">
-          <Database className="motion-safe:animate-pulse h-4 w-4 text-moss" aria-hidden="true" />
+      <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-800 px-4 py-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
+          <Database className="motion-safe:animate-pulse h-4 w-4 text-apple-blue" aria-hidden="true" />
           查询结果
-          <span className="text-xs font-normal text-ink/45">（正在生成...）</span>
+          <span className="text-xs font-normal text-gray-500 dark:text-gray-400">（正在生成...）</span>
         </div>
       </div>
       <div className="space-y-2.5 p-4">
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="flex gap-3">
-            <div className="motion-safe:animate-pulse h-4 w-20 rounded bg-ink/8" />
-            <div className="motion-safe:animate-pulse h-4 w-32 rounded bg-ink/8" />
-            <div className="motion-safe:animate-pulse h-4 w-24 rounded bg-ink/8" />
-            <div className="motion-safe:animate-pulse h-4 flex-1 rounded bg-ink/8" />
+            <div className="motion-safe:animate-pulse h-4 w-20 rounded-xl bg-black/5 dark:bg-white dark:bg-gray-900/8" />
+            <div className="motion-safe:animate-pulse h-4 w-32 rounded-xl bg-black/5 dark:bg-white dark:bg-gray-900/8" />
+            <div className="motion-safe:animate-pulse h-4 w-24 rounded-xl bg-black/5 dark:bg-white dark:bg-gray-900/8" />
+            <div className="motion-safe:animate-pulse h-4 flex-1 rounded-xl bg-black/5 dark:bg-white dark:bg-gray-900/8" />
           </div>
         ))}
       </div>
@@ -63,21 +63,21 @@ function formatCell(value: unknown) {
 // 零结果空状态：SQL 成功执行但数据库无匹配行
 function EmptyResult() {
   return (
-    <section className="mt-4 overflow-hidden border border-ink/10 bg-white/70 shadow-line">
-      <div className="flex items-center gap-2 border-b border-ink/10 px-4 py-3 text-sm font-semibold text-ink">
-        <Database className="h-4 w-4 text-moss" aria-hidden="true" />
+    <section className="mt-4 overflow-hidden border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/80 dark:bg-gray-900/80 shadow-sm">
+      <div className="flex items-center gap-2 border-b border-gray-200 dark:border-gray-800 px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">
+        <Database className="h-4 w-4 text-apple-blue" aria-hidden="true" />
         查询结果
       </div>
       <div className="flex flex-col items-center justify-center gap-3 px-6 py-12 text-center">
-        <div className="grid h-12 w-12 place-items-center rounded-full bg-ink/5 text-ink/45">
+        <div className="grid h-12 w-12 place-items-center rounded-full bg-black/5 dark:bg-white dark:bg-gray-900/8 text-gray-500 dark:text-gray-400">
           <SearchX className="h-6 w-6" aria-hidden="true" />
         </div>
         <div className="space-y-1">
-          <p className="text-sm font-semibold text-ink">未找到匹配的数据</p>
-          <p className="text-xs text-ink/55">SQL 已成功执行，但数据库中没有匹配的行</p>
+          <p className="text-sm font-semibold text-gray-900 dark:text-white">未找到匹配的数据</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400">SQL 已成功执行，但数据库中没有匹配的行</p>
         </div>
-        <div className="mt-2 max-w-md text-left text-xs text-ink/55">
-          <p className="font-medium text-ink/65">可能原因：</p>
+        <div className="mt-2 max-w-md text-left text-xs text-gray-500 dark:text-gray-400">
+          <p className="font-medium text-gray-600 dark:text-gray-400">可能原因：</p>
           <ul className="mt-1 list-disc space-y-0.5 pl-5">
             <li>指定的时间段内没有数据</li>
             <li>字段尚未在元数据中声明</li>
@@ -138,7 +138,7 @@ function highlightCell(text: string, keywords: string[]): React.ReactNode {
     return isMatch ? (
       <mark
         key={i}
-        className="rounded bg-brass/30 px-0.5 text-ink"
+        className="rounded-xl bg-amber-500/30 px-0.5 text-gray-900 dark:text-white"
         title="匹配 query 关键词"
       >
         {part}
@@ -212,14 +212,14 @@ function ResultTableImpl({
   };
 
   return (
-    <section className="mt-4 overflow-hidden border border-ink/10 bg-white/70 shadow-line">
-      <div className="flex items-center justify-between border-b border-ink/10 px-4 py-3">
-        <div className="flex items-center gap-2 text-sm font-semibold text-ink">
-          <Database className="h-4 w-4 text-moss" aria-hidden="true" />
+    <section className="mt-4 overflow-hidden border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/80 dark:bg-gray-900/80 shadow-sm">
+      <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-800 px-4 py-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
+          <Database className="h-4 w-4 text-apple-blue" aria-hidden="true" />
           查询结果
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 text-xs text-ink/55">
+          <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
             <FileJson className="h-3.5 w-3.5" aria-hidden="true" />
             {rows.length} 行
           </div>
@@ -227,7 +227,7 @@ function ResultTableImpl({
             <button
               type="button"
               onClick={handleExportCsv}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-ink/65 transition hover:bg-moss/10 hover:text-moss focus:outline-none focus:ring-2 focus:ring-moss/40"
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 transition hover:bg-apple-blue/10 hover:text-apple-blue focus:outline-none focus:ring-2 focus:ring-apple-blue/40"
               title="导出 CSV（Excel 友好）"
               aria-label="导出 CSV"
             >
@@ -237,7 +237,7 @@ function ResultTableImpl({
             <button
               type="button"
               onClick={handleExportJson}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-ink/65 transition hover:bg-moss/10 hover:text-moss focus:outline-none focus:ring-2 focus:ring-moss/40"
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 transition hover:bg-apple-blue/10 hover:text-apple-blue focus:outline-none focus:ring-2 focus:ring-apple-blue/40"
               title="导出 JSON（保留原始结构）"
               aria-label="导出 JSON"
             >
@@ -255,7 +255,7 @@ function ResultTableImpl({
                 <th
                   key={column}
                   scope="col"
-                  className="border-b border-ink/10 px-4 py-3 font-semibold text-ink/70"
+                  className="border-b border-gray-200 dark:border-gray-800 px-4 py-3 font-semibold text-gray-700 dark:text-gray-300"
                 >
                   {highlightCell(column, keywords)}
                 </th>
@@ -264,9 +264,9 @@ function ResultTableImpl({
           </thead>
           <tbody>
             {rows.map((row, rowIndex) => (
-              <tr key={rowIndex} className="odd:bg-white/45 even:bg-white/20">
+              <tr key={rowIndex} className="odd:bg-white dark:bg-gray-900/80 dark:bg-gray-900/80 even:bg-white dark:bg-gray-900/40 dark:bg-gray-900/40">
                 {columns.map((column) => (
-                  <td key={column} className="border-b border-ink/5 px-4 py-3 text-ink/80">
+                  <td key={column} className="border-b border-gray-900 dark:border-gray-200/5 px-4 py-3 text-gray-800 dark:text-gray-200">
                     {highlightCell(formatCell(row[column]), keywords)}
                   </td>
                 ))}

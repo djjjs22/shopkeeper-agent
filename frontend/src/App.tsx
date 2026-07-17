@@ -20,6 +20,7 @@ import { MessageBubble } from "./components/MessageBubble";
 import { RecentHistory } from "./components/RecentHistory";
 import { streamQuery, clearSession, ApiError } from "./lib/agentApi";
 import { mapBackendMessage, mapHttpError, mapJsError } from "./lib/errorMessages";
+import { buildPendingSteps, mergeStepEvent } from "./lib/stepTemplate";
 import { useToast } from "./components/Toast";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { KeyboardShortcutsModal } from "./components/KeyboardShortcutsModal";
@@ -39,16 +40,6 @@ const MAX_RECENT_QUERIES = 8;
 
 function makeId() {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function upsertStep(steps: StepState[] = [], event: Extract<AgentEvent, { type: "progress" }>) {
-  const next = steps.filter((item) => item.step !== event.step);
-  next.push({
-    step: event.step,
-    status: event.status,
-    updatedAt: Date.now(),
-  });
-  return next;
 }
 
 export default function App() {
@@ -129,13 +120,16 @@ export default function App() {
     };
 
     const assistantId = makeId();
+    // 预填完整执行计划（默认 data_query，13 步 + 1 步分类共 14 步），
+    // 全部 pending。后端事件流到来后逐步覆盖状态。
+    // 效果：用户从一开始就能看到系统将要做什么，而不是"等半天看不到东西"。
     const assistantMessage: ChatMessage = {
       id: assistantId,
       role: "assistant",
       content: "正在连接问数智能体...",
       createdAt: Date.now(),
       status: "streaming",
-      steps: [],
+      steps: buildPendingSteps("data_query"),
     };
 
     const controller = new AbortController();
@@ -153,7 +147,7 @@ export default function App() {
             return {
               ...message,
               content: event.status === "running" ? `正在执行：${event.step}` : message.content,
-              steps: upsertStep(message.steps, event),
+              steps: mergeStepEvent(message.steps ?? [], event),
             };
           }
 
@@ -276,15 +270,37 @@ export default function App() {
   }, [sidebarOpen]);
 
   return (
-    <div className="h-dvh overflow-hidden bg-parchment text-ink">
-      <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(90deg,rgba(32,32,29,0.045)_1px,transparent_1px),linear-gradient(rgba(32,32,29,0.035)_1px,transparent_1px)] bg-[size:48px_48px]" />
-      <div className="pointer-events-none fixed inset-0 grain" />
+    <div className="h-dvh overflow-hidden text-gray-900 dark:text-white">
+      {/* Aurora 极光背景层：3 个浮动光球 + 极大模糊（Block Studio 规范） */}
+      <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
+        <div
+          className="absolute -left-[15%] -top-[10%] h-[60vw] w-[60vw] rounded-full opacity-70 blur-[100px] animate-aurora-1"
+          style={{
+            background:
+              "radial-gradient(circle, rgba(162, 210, 255, 0.55) 0%, rgba(162, 210, 255, 0) 70%)",
+          }}
+        />
+        <div
+          className="absolute right-[-10%] top-[25%] h-[55vw] w-[55vw] rounded-full opacity-60 blur-[100px] animate-aurora-2"
+          style={{
+            background:
+              "radial-gradient(circle, rgba(200, 180, 255, 0.5) 0%, rgba(200, 180, 255, 0) 70%)",
+          }}
+        />
+        <div
+          className="absolute bottom-[-15%] left-[25%] h-[50vw] w-[50vw] rounded-full opacity-55 blur-[100px] animate-aurora-3"
+          style={{
+            background:
+              "radial-gradient(circle, rgba(255, 200, 230, 0.45) 0%, rgba(255, 200, 230, 0) 70%)",
+          }}
+        />
+      </div>
 
-      <div className="relative grid h-full min-h-0 overflow-hidden lg:grid-cols-[300px_minmax(0,1fr)]">
+      <div className="relative z-10 grid h-full min-h-0 overflow-hidden lg:grid-cols-[320px_minmax(0,1fr)]">
         {/* 移动端遮罩：drawer 打开时背景暗化 */}
         <div
           className={cn(
-            "fixed inset-0 z-30 bg-ink/45 backdrop-blur-sm transition-opacity lg:hidden",
+            "fixed inset-0 z-30 bg-black/45 dark:bg-black/65 backdrop-blur-sm transition-opacity lg:hidden",
             sidebarOpen ? "opacity-100" : "pointer-events-none opacity-0",
           )}
           onClick={() => setSidebarOpen(false)}
@@ -294,26 +310,26 @@ export default function App() {
         <aside
           id="app-sidebar"
           className={cn(
-            "fixed inset-y-0 left-0 z-40 flex w-72 min-h-0 flex-col border-r border-ink/10 bg-[#efe6d8]/95 shadow-panel backdrop-blur transition-transform duration-200 motion-safe:ease-out lg:static lg:translate-x-0 lg:bg-[#efe6d8]/85 lg:shadow-none",
+            "fixed inset-y-0 left-0 z-40 flex w-72 min-h-0 flex-col border-r border-black/5 bg-white/70 shadow-lg backdrop-blur-2xl transition-transform duration-300 motion-safe:ease-spring-in lg:static lg:translate-x-0 lg:bg-white/60 lg:shadow-none dark:border-white/10 dark:bg-gray-950/70 lg:dark:bg-gray-950/60",
             sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
           )}
           aria-label="侧栏导航"
         >
-          <div className="flex items-center justify-between border-b border-ink/10 px-5 py-5">
+          <div className="flex items-center justify-between border-b border-black/5 px-6 py-5 dark:border-white/10">
             <div className="flex items-center gap-3">
-              <div className="grid h-10 w-10 place-items-center bg-ink text-parchment">
+              <div className="grid h-10 w-10 place-items-center rounded-2xl bg-gradient-to-br from-apple-blue to-apple-purple text-white shadow-sm">
                 <BarChart3 className="h-5 w-5" aria-hidden="true" />
               </div>
               <div>
-                <div className="text-base font-semibold tracking-[0.02em]">电商问数</div>
-                <div className="text-xs text-ink/50">shopkeeper-agent</div>
+                <div className="text-base font-semibold tracking-tight text-gray-900 dark:text-white">电商问数</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">shopkeeper-agent</div>
               </div>
             </div>
             {/* 移动端关闭按钮（lg 以上隐藏） */}
             <button
               type="button"
               onClick={() => setSidebarOpen(false)}
-              className="grid h-8 w-8 place-items-center rounded-full text-ink/55 transition hover:bg-ink/5 hover:text-ink focus:outline-none focus:ring-2 focus:ring-moss/40 lg:hidden"
+              className="grid h-8 w-8 place-items-center rounded-full text-gray-500 dark:text-gray-400 transition hover:bg-black/5 dark:bg-white dark:bg-gray-900/8 hover:text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-apple-blue/40 lg:hidden"
               title="关闭侧栏 (Esc)"
               aria-label="关闭侧栏"
             >
@@ -329,25 +345,26 @@ export default function App() {
                 setSidebarOpen(false);
               }}
               disabled={isStreaming}
-              className="flex h-11 w-full items-center justify-center gap-2 bg-ink text-sm font-semibold text-parchment transition hover:bg-soot disabled:cursor-not-allowed disabled:bg-ink/35"
+              className="group flex h-11 w-full items-center justify-center gap-2 rounded-full bg-apple-blue text-sm font-semibold text-white shadow-sm transition-all duration-200 ease-spring hover:bg-apple-blue-hover hover:scale-[1.02] hover:shadow-md active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-400 dark:disabled:bg-gray-800"
             >
-              <MessageSquarePlus className="h-4 w-4" aria-hidden="true" />
+              <MessageSquarePlus className="h-4 w-4 transition-transform group-hover:rotate-90" aria-hidden="true" />
               新会话
             </button>
 
             <section>
-              <div className="mb-2 flex items-center gap-2 px-1 text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">
+              <div className="mb-2 flex items-center gap-2 px-1 text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
                 <History className="h-3.5 w-3.5" aria-hidden="true" />
                 样例
               </div>
               <div className="space-y-2">
-                {examples.map((example) => (
+                {examples.map((example, idx) => (
                   <button
                     key={example}
                     type="button"
                     disabled={isStreaming}
                     onClick={() => startQueryAndCloseDrawer(example)}
-                    className="w-full border border-ink/10 bg-white/42 px-3 py-3 text-left text-sm leading-5 text-ink/75 transition hover:border-moss/35 hover:bg-white/75 disabled:cursor-not-allowed disabled:opacity-55"
+                    className="group w-full rounded-2xl border border-black/5 bg-gray-100 px-4 py-3 text-left text-[13px] leading-5 text-gray-900 transition-all duration-200 ease-spring hover:bg-gray-200 hover:scale-[1.01] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/5 dark:bg-gray-800 dark:text-white dark:hover:bg-gray-700"
+                    style={{ animationDelay: `${idx * 40}ms` }}
                   >
                     {example}
                   </button>
@@ -362,8 +379,8 @@ export default function App() {
             />
           </div>
 
-          <div className="border-t border-ink/10 p-4">
-            <div className="grid gap-2 text-xs text-ink/55">
+          <div className="border-t border-gray-200 dark:border-gray-800 p-4">
+            <div className="grid gap-2 text-xs text-gray-500 dark:text-gray-400">
               <div className="flex items-center justify-between gap-3">
                 <span className="inline-flex items-center gap-2">
                   <Server className="h-3.5 w-3.5" aria-hidden="true" />
@@ -382,14 +399,14 @@ export default function App() {
           </div>
         </aside>
 
-        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-          <header className="flex h-16 shrink-0 items-center justify-between border-b border-ink/10 bg-parchment/88 px-4 backdrop-blur lg:px-6">
+        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-transparent">
+          <header className="flex h-16 shrink-0 items-center justify-between border-b border-black/5 bg-white/60 px-4 backdrop-blur-xl lg:px-6 dark:border-white/10 dark:bg-gray-950/60">
             <div className="flex min-w-0 items-center gap-3">
               {/* 移动端汉堡按钮：打开 sidebar drawer（lg 以上隐藏） */}
               <button
                 type="button"
                 onClick={() => setSidebarOpen(true)}
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-ink/65 transition hover:bg-ink/5 hover:text-ink focus:outline-none focus:ring-2 focus:ring-moss/40 lg:hidden"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-gray-600 transition-all duration-200 ease-spring hover:bg-black/5 hover:scale-105 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-apple-blue/40 lg:hidden dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white"
                 title="打开侧栏"
                 aria-label="打开侧栏"
                 aria-expanded={sidebarOpen}
@@ -397,12 +414,12 @@ export default function App() {
               >
                 <Menu className="h-5 w-5" aria-hidden="true" />
               </button>
-              <div className="grid h-9 w-9 shrink-0 place-items-center bg-moss text-white">
+              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-apple-blue to-apple-purple text-white shadow-sm">
                 <BarChart3 className="h-4 w-4" aria-hidden="true" />
               </div>
               <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-ink">智能数据分析 Agent</div>
-                <div className="truncate text-xs text-ink/45">FastAPI SSE / LangGraph</div>
+                <div className="truncate text-sm font-semibold tracking-tight text-gray-900 dark:text-white">智能数据分析 Agent</div>
+                <div className="truncate text-xs text-gray-500 dark:text-gray-400">FastAPI SSE / LangGraph</div>
               </div>
             </div>
             <button
@@ -410,7 +427,7 @@ export default function App() {
               onClick={clearConversation}
               disabled={messages.length === 0 || isStreaming}
               className={cn(
-                "grid h-9 w-9 place-items-center rounded-full text-ink/55 transition hover:bg-ink/5 hover:text-ink disabled:cursor-not-allowed disabled:opacity-35",
+                "grid h-9 w-9 place-items-center rounded-full text-gray-500 transition-all duration-200 ease-spring hover:bg-black/5 hover:scale-105 hover:text-gray-900 active:scale-95 disabled:cursor-not-allowed disabled:opacity-35 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white",
               )}
               title="清空"
               aria-label="清空"
@@ -449,9 +466,9 @@ export default function App() {
             </ErrorBoundary>
           </div>
 
-          <div className="border-t border-ink/10 bg-[#efe6d8]/45 px-4 py-2 text-center text-xs text-ink/45">
+          <div className="border-t border-gray-200 dark:border-gray-800 bg-gray-100/70 dark:bg-gray-900/45 px-4 py-2 text-center text-xs text-gray-500 dark:text-gray-400">
             <span className="inline-flex items-center gap-2">
-              <Leaf className="h-3.5 w-3.5 text-moss" aria-hidden="true" />
+              <Leaf className="h-3.5 w-3.5 text-apple-blue" aria-hidden="true" />
               {isStreaming ? "运行中" : "就绪"}
             </span>
           </div>
