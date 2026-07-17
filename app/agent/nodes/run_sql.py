@@ -20,6 +20,7 @@ Python 知识点：
 import re  # import = 导入。re 是 Python 的"正则表达式"模块
 
 # 正则表达式：一种文本模式匹配语言，用来查找、替换符合特定模式的字符串
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 # from ... import ... = 从某个模块导入特定的东西
@@ -108,6 +109,7 @@ def _clean_sql(sql: str) -> str:
     return sql.strip()
 
 
+@timed_node
 async def run_sql(
     state: DataAgentState,     # state = Agent 的当前状态，包含 sql、query 等字段
     runtime: Runtime[DataAgentContext]  # runtime = 运行时上下文，提供依赖和流式输出

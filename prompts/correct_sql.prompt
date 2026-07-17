@@ -5,25 +5,25 @@
 
 【上下文信息】
 可用数据表信息如下：
-{table_infos}
+{{ table_infos }}
 
 可参考的指标信息如下：
-{metric_infos}
+{{ metric_infos }}
 
 当前的时间信息如下：
-{date_info}
+{{ date_info }}
 
 数据库环境如下：
-{db_info}
+{{ db_info }}
 
 原始用户查询如下：
-{query}
+{{ query }}
 
 待纠正的 SQL 如下：
-{sql}
+{{ sql }}
 
 SQL 执行错误信息如下：
-{error}
+{{ error }}
 
 【任务要求】
 1. 必须严格基于 SQL 执行错误信息进行修正，仅修复导致 SQL 无法执行或不符合数据库规范的问题，不得无依据重写 SQL 结构。

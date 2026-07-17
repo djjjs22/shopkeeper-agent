@@ -19,10 +19,11 @@ from langchain_core.output_parsers import StrOutputParser  # noqa: F401  # 保�
 
 from app.core.safe_json_parser import _build_strip_parser_runnable
 from langchain_core.prompts import PromptTemplate
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
-from app.agent.llm import llm
+from app.agent.llm import get_llm
 from app.agent.state import DataAgentState
 from app.core.log import logger
 from app.prompt.prompt_loader import load_prompt
@@ -31,8 +32,10 @@ from app.prompt.prompt_loader import load_prompt
 VALID_INTENTS = ("chitchat", "metadata_query", "data_query")
 
 
+@timed_node
 async def classify_intent(state: DataAgentState, runtime: Runtime[DataAgentContext]):
     """对用户输入做意图分类，结果写入 state["intent"] 控制后续路由"""
+    llm = get_llm("classify_intent")  # 按 node_profiles 路由
 
     writer = runtime.stream_writer
     step = "意图分类"
@@ -43,6 +46,7 @@ async def classify_intent(state: DataAgentState, runtime: Runtime[DataAgentConte
 
         prompt = PromptTemplate(
             template=load_prompt("classify_intent"),
+            template_format="jinja2",
             input_variables=["query"],
         )
         # 意图分类只需要纯文本输出（一个单词），用 _build_strip_parser_runnable 兼容 think 块

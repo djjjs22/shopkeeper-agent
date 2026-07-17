@@ -3,19 +3,19 @@
 
 【上下文信息】
 可用数据表信息如下：
-{table_infos}
+{{ table_infos }}
 
 可参考的指标信息如下：
-{metric_infos}
+{{ metric_infos }}
 
 当前的时间信息如下：
-{date_info}
+{{ date_info }}
 
 数据库环境如下：
-{db_info}
+{{ db_info }}
 
 查询改写结果（结构化时间范围，2026-07-14 改造后由 rewrite_query 节点提供）：
-{time_range}
+{{ time_range }}
 说明：
 - 如果【查询改写结果】是 "无"，表示用户没有显式时间意图，不要硬加 WHERE 时间条件
 - 如果【查询改写结果】给出了"原始表达 + 起止日期"，必须用起止日期在 WHERE 中过滤
@@ -89,6 +89,6 @@ GROUP BY order_date
 ORDER BY order_date
 
 用户查询如下：
-{query}
+{{ query }}
 
 输出：

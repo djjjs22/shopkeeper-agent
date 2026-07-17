@@ -7,6 +7,7 @@
 
 from datetime import date
 
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
@@ -14,6 +15,7 @@ from app.agent.state import DataAgentState, DateInfoState, DBInfoState
 from app.core.log import logger
 
 
+@timed_node
 async def add_extra_context(state: DataAgentState, runtime: Runtime[DataAgentContext]):
     """补齐 SQL 生成所需的日期和数据库环境信息"""
 

@@ -74,9 +74,9 @@
 
 输入：
 用户问题：
-{query}
+{{ query }}
 
 候选指标信息：
-{metric_infos}
+{{ metric_infos }}
 
 输出：

@@ -13,10 +13,12 @@
 
 import jieba
 import jieba.analyse
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 from pathlib import Path
 
 from app.agent.context import DataAgentContext
+from app.agent.llm import get_llm
 from app.agent.state import DataAgentState
 from app.core.log import logger
 
@@ -26,8 +28,9 @@ if _USERDICT_PATH.exists():
     jieba.load_userdict(str(_USERDICT_PATH))
 
 
+@timed_node
 async def extract_keywords(state: DataAgentState, runtime: Runtime[DataAgentContext]):
-    """抽取用户问题中的关键词，并通过流式输出反馈当前进度"""
+    llm = get_llm("extract_keywords")  # 按 node_profiles 路由
 
     step = "抽取关键词"
     writer = runtime.stream_writer

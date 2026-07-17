@@ -10,19 +10,21 @@
 # 详见 app/core/safe_json_parser.py 顶部 + docs/notes/eval_e2e_think兼容改造-20260711.md
 from langchain_core.output_parsers import StrOutputParser  # noqa: F401  # 保留以备回滚
 from langchain_core.prompts import PromptTemplate
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.core.safe_json_parser import _build_strip_parser_runnable
 
 from app.agent.context import DataAgentContext
-from app.agent.llm import llm
+from app.agent.llm import get_llm
 from app.agent.state import DataAgentState
 from app.core.log import logger
 
 # 闲聊不需要单独的 prompt 文件——逻辑简单，直接内联
+# 2026-07-17 改造：f-string → jinja2 写法（与 generate_intent 等节点统一）
 CHITCHAT_PROMPT = """你是一个友好的电商问数助手。用户正在和你闲聊，请自然地回应。
 
-用户说：{query}
+用户说：{{ query }}
 
 要求：
 - 简短自然，不超过两句话
@@ -31,8 +33,10 @@ CHITCHAT_PROMPT = """你是一个友好的电商问数助手。用户正在和�
 """
 
 
+@timed_node
 async def respond_chitchat(state: DataAgentState, runtime: Runtime[DataAgentContext]):
-    """闲聊短路响应：直接用 LLM 回复，不走 RAG 链路"""
+    """闲聊短路响应节点"""
+    llm = get_llm("respond_chitchat")  # 按 node_profiles 路由
 
     writer = runtime.stream_writer
     step = "闲聊响应"
@@ -43,6 +47,7 @@ async def respond_chitchat(state: DataAgentState, runtime: Runtime[DataAgentCont
 
         prompt = PromptTemplate(
             template=CHITCHAT_PROMPT,
+            template_format="jinja2",
             input_variables=["query"],
         )
         chain = prompt | llm | _build_strip_parser_runnable()

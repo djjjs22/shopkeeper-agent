@@ -21,6 +21,7 @@ from langchain_huggingface import HuggingFaceEndpointEmbeddings
 from app.agent.context import DataAgentContext
 from app.agent.graph import graph
 from app.agent.state import DataAgentState
+from app.agent.supervisor_graph import supervisor_graph
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
 from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
@@ -50,6 +51,55 @@ class QueryService:
         self.column_qdrant_repository = column_qdrant_repository
         self.metric_qdrant_repository = metric_qdrant_repository
         self.value_es_repository = value_es_repository
+
+    async def query_multi_agent(self, query: str, session_id: str = "default"):
+        """Multi-Agent 模式（2026-07-17 改造）
+
+        跟 query() 一样 SSE 流式，但走 supervisor_graph：
+        planner 拆 sub_query → data_agent 跑 N 次（Send API 并行）→
+        aggregator 合并 → reviewer 评分（max_loop=2 反思回路）
+
+        设计：
+        - state["use_multi_agent"] 不写入（multi-agent 是 path-level 决策，
+          不污染子 graph state）
+        - 复用相同的 history / DataAgentContext 组装逻辑
+        - 异常处理跟 query() 一致：包装成 SSE 错误消息
+
+        与 query() 的区别：
+        - 老 graph 是 13 节点单链；supervisor_graph 是 4 节点（planner +
+          subgraph + aggregator + reviewer）
+        - 多 sub_query 时并行跑多个子图；少 sub_query 时退化为近原行为
+        """
+        # 拿历史对话（与 query() 一致）
+        history = await get_history(session_id, max_count=3)
+
+        state = DataAgentState(query=query, history=history)
+        context = DataAgentContext(
+            column_qdrant_repository=self.column_qdrant_repository,
+            embedding_client=self.embedding_client,
+            metric_qdrant_repository=self.metric_qdrant_repository,
+            value_es_repository=self.value_es_repository,
+            meta_mysql_repository=self.meta_mysql_repository,
+            dw_mysql_repository=self.dw_mysql_repository,
+        )
+        try:
+            last_result = None
+            # supervisor_graph 节点数少，progress 事件也更稀疏（planner / aggregator / reviewer 三个）
+            async for chunk in supervisor_graph.astream(
+                input=state, context=context, stream_mode="custom"
+            ):
+                if isinstance(chunk, dict) and chunk.get("type") == "result":
+                    last_result = chunk.get("data")
+                yield f"data: {json.dumps(chunk, ensure_ascii=False, default=str)}\n\n"
+
+            if last_result is not None:
+                await add_message(session_id, "user", query)
+                result_text = str(last_result)[:200]
+                await add_message(session_id, "assistant", result_text)
+
+        except Exception as e:
+            error = {"type": "error", "message": str(e)}
+            yield f"data: {json.dumps(error, ensure_ascii=False, default=str)}\n\n"
 
     async def query(self, query: str, session_id: str = "default"):
         """执行一次问数工作流，并逐段产出 SSE 消息

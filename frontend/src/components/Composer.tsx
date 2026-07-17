@@ -3,8 +3,13 @@
  * - 输入框：浅灰背景 (#F2F2F7) + Focus 变白 + 蓝色光晕
  * - 发送按钮：胶囊圆角 + hover scale 弹性
  * - 自动高度 + Ctrl/Cmd+K + Esc
+ *
+ * 2026-07-17 改造：加 Multi-Agent 开关
+ * - 开关在输入框下方左侧，灰色未激活 / 蓝色激活
+ * - 激活时调用 /api/query 时 use_multi_agent=true
+ * - 默认 false（走老 13 节点 graph）
  */
-import { ArrowUp, Square, WandSparkles } from "lucide-react";
+import { ArrowUp, Square, WandSparkles, Sparkles } from "lucide-react";
 import { FormEvent, KeyboardEvent, useEffect, useRef } from "react";
 import { cn } from "../lib/format";
 
@@ -12,18 +17,22 @@ type ComposerProps = {
     value: string;
     disabled: boolean;
     isStreaming: boolean;
+    useMultiAgent: boolean;
     onChange: (value: string) => void;
     onSubmit: () => void;
     onStop: () => void;
+    onToggleMultiAgent: (next: boolean) => void;
 };
 
 export function Composer({
     value,
     disabled,
     isStreaming,
+    useMultiAgent,
     onChange,
     onSubmit,
     onStop,
+    onToggleMultiAgent,
 }: ComposerProps) {
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -97,11 +106,54 @@ export function Composer({
                     )}
                 </button>
             </div>
-            <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-gray-400">
-                Enter 发送 · Shift+Enter 换行 · Esc 停止 ·{" "}
-                <kbd className="font-mono">⌘K</kbd> 聚焦 ·{" "}
-                <kbd className="font-mono">?</kbd> 快捷键面板
-            </p>
+            <div className="mx-auto mt-2 flex max-w-3xl items-center justify-between gap-4 text-[11px] text-gray-400">
+                {/* Multi-Agent 开关（左） */}
+                <label
+                    className={cn(
+                        "inline-flex cursor-pointer select-none items-center gap-1.5 rounded-full px-2.5 py-1 transition-colors duration-150",
+                        useMultiAgent
+                            ? "bg-apple-blue/10 text-apple-blue"
+                            : "bg-gray-100/80 text-gray-500 hover:bg-gray-200/80 dark:bg-white/5 dark:hover:bg-white/10",
+                    )}
+                    title={
+                        useMultiAgent
+                            ? "Multi-Agent 模式已启用：planner 拆 sub_query 并行执行（适合复杂查询）"
+                            : "点击启用 Multi-Agent 模式"
+                    }
+                >
+                    <input
+                        type="checkbox"
+                        checked={useMultiAgent}
+                        onChange={(event) => onToggleMultiAgent(event.target.checked)}
+                        className="sr-only"
+                        aria-label="启用 Multi-Agent 模式"
+                    />
+                    <Sparkles className="h-3 w-3" aria-hidden="true" />
+                    <span className="font-medium">
+                        Multi-Agent
+                    </span>
+                    <span
+                        className={cn(
+                            "inline-block h-3 w-6 rounded-full transition-colors duration-150",
+                            useMultiAgent ? "bg-apple-blue" : "bg-gray-300 dark:bg-gray-600",
+                        )}
+                        aria-hidden="true"
+                    >
+                        <span
+                            className={cn(
+                                "inline-block h-3 w-3 translate-y-0 transform rounded-full bg-white shadow transition-transform duration-150",
+                                useMultiAgent ? "translate-x-3" : "translate-x-0",
+                            )}
+                        />
+                    </span>
+                </label>
+                {/* 快捷键提示（右） */}
+                <p className="text-center">
+                    Enter 发送 · Shift+Enter 换行 · Esc 停止 ·{" "}
+                    <kbd className="font-mono">⌘K</kbd> 聚焦 ·{" "}
+                    <kbd className="font-mono">?</kbd> 快捷键面板
+                </p>
+            </div>
         </form>
     );
 }

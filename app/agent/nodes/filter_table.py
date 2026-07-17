@@ -7,10 +7,11 @@
 
 import yaml
 from langchain_core.prompts import PromptTemplate
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
-from app.agent.llm import llm
+from app.agent.llm import get_llm
 from app.agent.state import DataAgentState, TableInfoState
 from app.core.log import logger
 # 2026-07-11 改造：JsonOutputParser → SafeJsonOutputParser
@@ -20,8 +21,9 @@ from app.core.safe_json_parser import SafeJsonOutputParser
 from app.prompt.prompt_loader import load_prompt
 
 
+@timed_node
 async def filter_table(state: DataAgentState, runtime: Runtime[DataAgentContext]):
-    """根据用户问题裁剪候选表结构上下文"""
+    llm = get_llm("filter_table")  # 按 node_profiles 路由
 
     writer = runtime.stream_writer
     step = "过滤表信息"
@@ -32,8 +34,10 @@ async def filter_table(state: DataAgentState, runtime: Runtime[DataAgentContext]
         table_infos: list[TableInfoState] = state["table_infos"]
 
         # table_infos 是嵌套结构，转成 YAML 后更适合放进提示词，也保留中文字段说明
+        # 2026-07-17 改造：f-string → jinja2（与 generate_intent 节点同步）
         prompt = PromptTemplate(
             template=load_prompt("filter_table_info"),
+            template_format="jinja2",
             input_variables=["query", "table_infos"],
         )
         # filter_table_info prompt 要求模型只输出 JSON 对象：表名 -> 字段名列表

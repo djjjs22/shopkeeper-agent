@@ -7,10 +7,11 @@ State 是 LangGraph 各节点之间传递和更新的共享数据
 SQL 生成闭环会继续写入候选 SQL 以及校验错误信息，用于控制校正或执行分支
 """
 
-from typing import TypedDict
+from typing import Optional, TypedDict
 
 from app.entities.column_info import ColumnInfo
 from app.entities.metric_info import MetricInfo
+from app.entities.plan_schema import QueryPlan
 from app.entities.value_info import ValueInfo
 
 
@@ -126,3 +127,13 @@ class DataAgentState(TypedDict):
     sql: str  # 生成或校正后的SQL
 
     error: str  # 校验SQL时出现的错误信息
+
+    # ── 2026-07-17 改造：Multi-Agent 改造（planner/aggregator/reviewer 用）──
+    # 这些字段在现有 single-agent 链路里都是 None，不影响老代码
+    plan: Optional[QueryPlan]  # Planner 输出的执行计划
+    sub_results: list  # 每个 sub_query 跑完的结果 [{sub_id, query, sql, rows, error}, ...]
+    final_response: dict  # Aggregator 合并后的最终回复 {answer, sub_results, is_synthesized}
+    confidence: float  # Reviewer 打分 0-1
+    review_action: Optional[str]  # "retry" / None；空表示通过
+    review_loop_count: int  # 反思轮数（max_loop=2 保护）
+    cached_pre_state: Optional[dict]  # 共享前置 subgraph 的结果缓存（reviewer retry 复用，避免重跑 16s）

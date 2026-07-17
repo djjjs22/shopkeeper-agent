@@ -54,6 +54,7 @@ function upsertStep(steps: StepState[] = [], event: Extract<AgentEvent, { type: 
 export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [useMultiAgent, setUseMultiAgent] = useState(false);  // 2026-07-17: Multi-Agent 开关
   const [activeController, setActiveController] = useState<AbortController | null>(null);
   // 最近查询历史：localStorage 持久化，刷新页面不丢失
   const [recentQueries, setRecentQueries] = useState<string[]>(() => {
@@ -177,7 +178,7 @@ export default function App() {
     };
 
     try {
-      await streamQuery(query, { signal: controller.signal, onEvent });
+      await streamQuery(query, { signal: controller.signal, onEvent, useMultiAgent });
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantId && message.status === "streaming"
@@ -482,9 +483,11 @@ export default function App() {
             value={draft}
             disabled={!canSubmit}
             isStreaming={isStreaming}
+            useMultiAgent={useMultiAgent}
             onChange={setDraft}
             onSubmit={() => startQuery()}
             onStop={stopQuery}
+            onToggleMultiAgent={setUseMultiAgent}
           />
         </main>
       </div>

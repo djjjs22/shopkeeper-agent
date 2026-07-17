@@ -5,7 +5,8 @@
 /out-tsc
 /bazel-out
 /node_modules
-/frontend/node_modules/   # 2026-07-13 新增：嵌套目录的 node_modules（/node_modules 只匹配根）
+/frontend/node_modules
+/frontend/node_modules/**
 .npm-cache
 .angular/
 .pnpm-store/
@@ -70,6 +71,10 @@ docker/embedding/
 # Runtime logs
 logs/
 
+# 历史归档（不应 commit）
+docs.zip
+
 # Local artifacts (not source)
 .obsidian/
 skills.zip
+COMMIT_MSG.md

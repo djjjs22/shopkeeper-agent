@@ -7,10 +7,11 @@ SQL 修正节点
 
 import yaml
 from langchain_core.prompts import PromptTemplate
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
-from app.agent.llm import llm
+from app.agent.llm import get_llm
 from app.agent.state import DataAgentState
 from app.core.log import logger
 # 2026-07-11 改造：StrOutputParser → StripThinkStrParser
@@ -20,8 +21,10 @@ from app.core.safe_json_parser import StripThinkStrParser
 from app.prompt.prompt_loader import load_prompt
 
 
+@timed_node
 async def correct_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]):
-    """根据校验错误修正 SQL"""
+    """根据数据库 explain 报错修正上一轮 SQL"""
+    llm = get_llm("correct_sql")  # 按 node_profiles 路由
 
     writer = runtime.stream_writer
     step = "校正SQL"
@@ -41,6 +44,7 @@ async def correct_sql(state: DataAgentState, runtime: Runtime[DataAgentContext])
 
         prompt = PromptTemplate(
             template=load_prompt("correct_sql"),
+            template_format="jinja2",
             input_variables=[
                 "table_infos",
                 "metric_infos",

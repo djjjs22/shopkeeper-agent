@@ -11,6 +11,7 @@
   详见 _recall_helpers.py
 """
 
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
@@ -22,6 +23,7 @@ from app.agent.state import DataAgentState
 from app.core.log import logger
 
 
+@timed_node
 async def recall_value(state: DataAgentState, runtime: Runtime[DataAgentContext]):
     """召回和用户问题相关的字段取值"""
 

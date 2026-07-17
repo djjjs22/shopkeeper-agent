@@ -6,6 +6,7 @@
 后续过滤节点不再关心信息来自哪个检索分支，只处理合并后的表上下文和指标上下文
 """
 
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
@@ -22,6 +23,7 @@ from app.entities.table_info import TableInfo
 from app.entities.value_info import ValueInfo
 
 
+@timed_node
 async def merge_retrieved_info(
     state: DataAgentState, runtime: Runtime[DataAgentContext]
 ):

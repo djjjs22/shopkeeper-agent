@@ -11,6 +11,7 @@
   详见 _recall_helpers.py
 """
 
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
@@ -24,6 +25,7 @@ from app.core.retry import retry_once
 from app.entities.column_info import ColumnInfo
 
 
+@timed_node
 async def recall_column(state: DataAgentState, runtime: Runtime[DataAgentContext]):
     """召回和用户问题语义相关的字段元数据"""
 

@@ -11,6 +11,7 @@
   详见 _recall_helpers.py
 """
 
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
@@ -24,6 +25,7 @@ from app.core.retry import retry_once
 from app.entities.metric_info import MetricInfo
 
 
+@timed_node
 async def recall_metric(state: DataAgentState, runtime: Runtime[DataAgentContext]):
     """召回和用户问题语义相关的业务指标"""
 

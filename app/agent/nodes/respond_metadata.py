@@ -14,6 +14,7 @@
 import re
 
 import jieba
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
@@ -66,6 +67,7 @@ def _is_metric_definition_query(query: str) -> bool:
     return any(kw in query for kw in metric_keywords)
 
 
+@timed_node
 async def respond_metadata(state: DataAgentState, runtime: Runtime[DataAgentContext]):
     """元数据查询短路响应：直接查 Meta MySQL 返回，不走 RAG 链路"""
 

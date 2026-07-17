@@ -54,6 +54,7 @@ async def expand_keywords_with_llm(
     """
     prompt = PromptTemplate(
         template=load_prompt(prompt_name),
+        template_format="jinja2",
         input_variables=["query"],
     )
     # 所有 extend_keywords_for_*_recall prompt 都要求只输出 JSON 数组

@@ -22,6 +22,9 @@ export class ApiError extends Error {
 type QueryOptions = {
   signal?: AbortSignal;
   onEvent: (event: AgentEvent) => void;
+  // 2026-07-17 改造：Multi-Agent 开关
+  // 默认 false（走老 13 节点 graph）—— 设为 true 时走 supervisor_graph
+  useMultiAgent?: boolean;
 };
 
 export async function streamQuery(query: string, options: QueryOptions) {
@@ -31,7 +34,10 @@ export async function streamQuery(query: string, options: QueryOptions) {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
     },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({
+      query,
+      use_multi_agent: options.useMultiAgent ?? false,
+    }),
     signal: options.signal,
   });
 

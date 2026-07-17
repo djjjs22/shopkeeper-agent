@@ -29,6 +29,7 @@ SQL 生成节点（RFC 刀1 改造：大模型角色压缩 / v2 版本）
 - 模板渲染抛异常 → sql_template 已兜底返回 SELECT 1
 """
 
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
@@ -39,6 +40,7 @@ from app.core.log import logger
 from app.services.sql_template import render_sql
 
 
+@timed_node
 async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]):
     """消费 query_intent，渲染成 SQL
 

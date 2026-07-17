@@ -35,18 +35,25 @@
 
 import yaml
 from langchain_core.prompts import PromptTemplate
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
-from app.agent.llm import llm
+from app.agent.llm import get_llm
 from app.agent.state import DataAgentState, InheritedContext, TimeRangeState
 from app.core.log import logger
+from app.core.pydantic_parser import PydanticIntentParser
+from app.core.retry import retry_once
 
-# 2026-07-11 改造：JsonOutputParser → SafeJsonOutputParser
-# 场景：LLM 输出 JSON 时被 think 块污染（M3/DeepSeek 模型）
-# 详见 app/core/safe_json_parser.py 顶部
-from app.core.safe_json_parser import SafeJsonOutputParser
+# 2026-07-17 改造：SafeJsonOutputParser → PydanticIntentParser
+# 动机：SafeJsonOutputParser 只剥 think + json.loads，下游读取字段时无类型保护
+# 改后：先剥 think 块 + 抓围栏，再 Pydantic QueryIntent 强校验
+# 失败 retry 1 次，仍失败降级空 intent（generate_sql 节点用 SELECT 1 兜底）
+from app.entities.intent_schema import QueryIntent
 from app.prompt.prompt_loader import load_prompt
+
+# 节点级 parser 单例（无状态，可复用）
+_intent_parser = PydanticIntentParser(pydantic_object=QueryIntent)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -102,14 +109,17 @@ def _format_business_rules_for_prompt(query: str) -> str:
 # 节点主体
 # ─────────────────────────────────────────────────────────────────────
 
+@timed_node
 async def generate_intent(state: DataAgentState, runtime: Runtime[DataAgentContext]):
     """调用 LLM 把用户问题 + 上下文转换为结构化 JSON intent
 
     关键设计：
     - 失败的兜底：返回空 intent（不抛异常），让下游 generate_sql 用 SELECT 1 兜底
     - prompt 严格约束 LLM "只输出 JSON，不输出 SQL"（见 generate_intent.prompt）
-    - 用 SafeJsonOutputParser 兼容 M3/DeepSeek 的 think 块
+    - 用 PydanticIntentParser 兼容 M3/DeepSeek 的 think 块
     """
+    llm = get_llm("generate_intent")  # 按 node_profiles 路由
+
     writer = runtime.stream_writer
     step = "生成查询意图"
     writer({"type": "progress", "step": step, "status": "running"})
@@ -129,8 +139,14 @@ async def generate_intent(state: DataAgentState, runtime: Runtime[DataAgentConte
         business_rules = _format_business_rules_for_prompt(query)
 
         # 构造 prompt
+        # 2026-07-17 改造：f-string → jinja2
+        # 动机：get_format_instructions() 拼接的 JSON Schema 含嵌套 {...{...}...}，
+        #       f-string 模板不允许嵌套替换字段，会抛 "Nested replacement fields are not allowed"，
+        #       导致 generate_intent 节点直接 fallback 为空 intent。
+        #       改 jinja2 后 JSON 字面量原样写（单层 {...}），变量用 {{ var }}。
         prompt = PromptTemplate(
-            template=load_prompt("generate_intent"),
+            template=load_prompt("generate_intent") + _intent_parser.get_format_instructions(),
+            template_format="jinja2",
             input_variables=[
                 "table_infos",
                 "metric_infos",
@@ -142,26 +158,38 @@ async def generate_intent(state: DataAgentState, runtime: Runtime[DataAgentConte
                 "query",
             ],
         )
-        # 用 SafeJsonOutputParser 解析 LLM 输出的 JSON
-        # 兼容 think 块 + 抓 ```json``` 围栏
-        chain = prompt | llm | SafeJsonOutputParser()
+        # 用 PydanticIntentParser 强校验：剥 think + 抓围栏 → model_validate
+        chain = prompt | llm | _intent_parser
 
-        intent = await chain.ainvoke({
-            # YAML 序列化表结构，保留嵌套 + 中文
-            "table_infos": yaml.dump(table_infos, allow_unicode=True, sort_keys=False),
-            "metric_infos": yaml.dump(metric_infos, allow_unicode=True, sort_keys=False),
-            "date_info": yaml.dump(date_info, allow_unicode=True, sort_keys=False),
-            "db_info": yaml.dump(db_info, allow_unicode=True, sort_keys=False),
-            "time_range": _format_time_range_for_prompt(time_range),
-            "inherited_context": _format_inherited_for_prompt(inherited),
-            "business_rules": business_rules,  # P2 新增
-            "query": query,
-        })
+        # 解析失败时 retry 1 次（保持原有"降级空 intent"兜底行为）
+        try:
+            intent_obj = await retry_once(
+                coro_factory=lambda: chain.ainvoke({
+                    # YAML 序列化表结构，保留嵌套 + 中文
+                    "table_infos": yaml.dump(table_infos, allow_unicode=True, sort_keys=False),
+                    "metric_infos": yaml.dump(metric_infos, allow_unicode=True, sort_keys=False),
+                    "date_info": yaml.dump(date_info, allow_unicode=True, sort_keys=False),
+                    "db_info": yaml.dump(db_info, allow_unicode=True, sort_keys=False),
+                    "time_range": _format_time_range_for_prompt(time_range),
+                    "inherited_context": _format_inherited_for_prompt(inherited),
+                    "business_rules": business_rules,  # P2 新增
+                    "query": query,
+                }),
+                label=f"{step}:LLM+Pydantic 解析",
+                max_retries=1,
+            )
+        except Exception as e:
+            # 解析失败（含 retry 后仍失败）：降级空 dict，让下游 generate_sql 用 SELECT 1 兜底
+            logger.error(f"{step}: 解析失败（已 retry 1 次），降级为空 intent: {e}")
+            intent = {}
+        else:
+            # Pydantic 强校验通过：model_dump(by_alias=True) 还原 from 字段名
+            intent = intent_obj.model_dump(by_alias=True, exclude_none=False)
 
-        # 防御性：LLM 可能返回非 dict（如 list、str、None）
+        # 防御性：理论上 model_dump 后一定是 dict，保留 isinstance 检查兜底
         if not isinstance(intent, dict):
             logger.warning(
-                f"{step}: LLM 返回非 dict（实际 {type(intent)}），降级为空 intent"
+                f"{step}: intent 非 dict（实际 {type(intent)}），降级为空 intent"
             )
             intent = {}
 

@@ -5,6 +5,7 @@ SQL 校验节点
 校验结果不在这里决定流程走向，而是通过 state["error"] 交给 graph.py 的条件边判断
 """
 
+from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
@@ -13,6 +14,7 @@ from app.core.log import logger
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
 
 
+@timed_node
 async def validate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]):
     """校验 SQL，并返回 error 字段控制后续条件分支"""
 

@@ -39,9 +39,16 @@ async def query_handler(
         is_new_session = True
 
     # 生成 StreamingResponse
+    # 2026-07-17 改造：use_multi_agent 字段控制走老 graph 还是 supervisor_graph
+    # 默认 False（向后兼容）—— 老用户访问 /api/query 行为不变
+    query_method = (
+        query_service.query_multi_agent
+        if body.use_multi_agent
+        else query_service.query
+    )
     response = StreamingResponse(
         # 把 session_id 传给 query_service，多轮对话靠它来检索历史
-        query_service.query(body.query, session_id=session_id),
+        query_method(body.query, session_id=session_id),
         media_type="text/event-stream",
     )
 

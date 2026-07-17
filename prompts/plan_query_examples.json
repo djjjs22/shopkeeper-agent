@@ -1,0 +1,150 @@
+{
+  "_comment": [
+    "Planner 节点的 few-shot 训练集。",
+    "每个例子 4 部分：query（用户原句）/ plan（拆解结果）/ reason（为什么这么拆）/ key_learning（设计要点）。",
+    "设计原则：",
+    "  1. 单 sub_query 能查 → 不拆（避免无谓拆分）",
+    "  2. 涉及两个不同时间窗口的对比 → 拆（同结构两段并行）",
+    "  3. 涉及派生指标（增长率/占比/差值）→ 拆成「原始指标 sub」+「派生 sub depends_on 原始」",
+    "  4. depends_on 字段是 sub_query ID 列表；空 list = 无依赖可以立刻并行",
+    "  5. 「假设」「预测」类 query 不拆（先按现有数据查，再让 LLM 解释）",
+    "",
+    "维护建议：",
+    "  - 加新例子时同时更新 prompts/plan_query.prompt 的 few-shot section",
+    "  - 用 tests/test_planner_examples.py 自动验证：每个 example 的 depends_on ID 都存在"
+  ],
+  "examples": [
+    {
+      "id": 1,
+      "query": "请算出这个月的环比增长率",
+      "plan": {
+        "sub_queries": [
+          {"id": 0, "query": "本月的销售额", "depends_on": []},
+          {"id": 1, "query": "上个月的销售额", "depends_on": []},
+          {"id": 2, "query": "环比增长率 = (本月 - 上月) / 上月", "depends_on": [0, 1]}
+        ]
+      },
+      "reason": "增长率是派生指标，必须先算两个原始 metric 再算差值。sub-0 和 sub-1 无依赖可并行，sub-2 必须等它们完成。",
+      "key_learning": "三段式：本月 + 上月 + 派生指标。经典 depends_on 场景。"
+    },
+    {
+      "id": 2,
+      "query": "5 月和 6 月的 GMV 对比",
+      "plan": {
+        "sub_queries": [
+          {"id": 0, "query": "5 月 GMV", "depends_on": []},
+          {"id": 1, "query": "6 月 GMV", "depends_on": []}
+        ]
+      },
+      "reason": "两个同结构时间窗口对比，结构相同可并行。无需派生 sub，让 Aggregator 在合并时算差值或对比。",
+      "key_learning": "不要硬塞派生计算到 planner。差异/对比让 Aggregator 在合并阶段算，planner 只管切 sub_query。"
+    },
+    {
+      "id": 3,
+      "query": "按大区拆解销售额，找出 TOP 3",
+      "plan": {
+        "sub_queries": [
+          {"id": 0, "query": "按大区汇总销售额，按销售额降序，取前 3", "depends_on": []}
+        ]
+      },
+      "reason": "单 SQL 就能搞定（GROUP BY + ORDER BY + LIMIT）。",
+      "key_learning": "不要为「看起来复杂」就拆。TOP N / 排名 / 分组聚合都单 SQL 解决。"
+    },
+    {
+      "id": 4,
+      "query": "华北上个月订单数",
+      "plan": {
+        "sub_queries": [
+          {"id": 0, "query": "上个月华北大区的订单数", "depends_on": []}
+        ]
+      },
+      "reason": "单维度 + 单时间 + 单指标，1 个 sub_query 就够。",
+      "key_learning": "简单 query 不拆。Planner 的关键判断是「什么时候该拆」，大多数 query 不该拆。"
+    },
+    {
+      "id": 5,
+      "query": "这个月新客户 vs 老客户的复购率",
+      "plan": {
+        "sub_queries": [
+          {"id": 0, "query": "本月按新老客分组的复购率", "depends_on": []}
+        ]
+      },
+      "reason": "虽然有两种「客户类型」，但都是「复购率」的维度分组，单 SQL 的 GROUP BY 就够了。",
+      "key_learning": "维度分组 ≠ 拆 sub。复购率只算一次，按新老客分组聚合。"
+    },
+    {
+      "id": 6,
+      "query": "上个月大区销售额排名 + 与本月对比增长率",
+      "plan": {
+        "sub_queries": [
+          {"id": 0, "query": "上月按大区汇总销售额", "depends_on": []},
+          {"id": 1, "query": "本月按大区汇总销售额", "depends_on": []},
+          {"id": 2, "query": "各大区环比增长率 (本月-上月)/上月", "depends_on": [0, 1]}
+        ]
+      },
+      "reason": "派生指标（增长率）+ 维度分组（按大区）的组合。和 id=1 类似，但要维度对齐。sub-2 需要等 sub-0 和 sub-1 都有大区维度的结果。",
+      "key_learning": "维度（按大区）保留到 sub-sub 层级，确保 JOIN / 计算时按大区对齐。"
+    },
+    {
+      "id": 7,
+      "query": "过去 7 天每天的订单数",
+      "plan": {
+        "sub_queries": [
+          {"id": 0, "query": "过去 7 天每天的订单数", "depends_on": []}
+        ]
+      },
+      "reason": "单 SQL：WHERE date BETWEEN ... GROUP BY date。",
+      "key_learning": "时间窗口单 GROUP BY，不需要拆。"
+    },
+    {
+      "id": 8,
+      "query": "近 3 个月滚动留存率",
+      "plan": {
+        "sub_queries": [
+          {"id": 0, "query": "第 1 个月注册用户", "depends_on": []},
+          {"id": 1, "query": "第 2 个月这些用户的活跃数", "depends_on": [0]},
+          {"id": 2, "query": "第 3 个月这些用户的活跃数", "depends_on": [0]}
+        ]
+      },
+      "reason": "留存率需要先有「初始用户群」，后续按月活跃数是该子集的过滤。所有 sub 都依赖 sub-0（同一群人）。",
+      "key_learning": "depends_on 不只是「并行性」信号，它表达「数据依赖关系」。sub-1 和 sub-2 都依赖 sub-0，但它们之间无依赖（可并行）。"
+    },
+    {
+      "id": 9,
+      "query": "华北 vs 华南 1 月 GMV 同比",
+      "plan": {
+        "sub_queries": [
+          {"id": 0, "query": "1 月华北 GMV", "depends_on": []},
+          {"id": 1, "query": "1 月华南 GMV", "depends_on": []},
+          {"id": 2, "query": "去 1 月华北 GMV", "depends_on": []},
+          {"id": 3, "query": "去 1 月华南 GMV", "depends_on": []}
+        ]
+      },
+      "reason": "4 个独立 sub_query 全部无依赖，可全部并行。无派生 sub，Aggregator 在合并时算同比。",
+      "key_learning": "全是并行 sub 的 case 也要拆，因为 4 个并行比 1 个 LLM 一次算 4 件快。"
+    },
+    {
+      "id": 10,
+      "query": "假设新品上线后，下个月销售额的预测是多少",
+      "plan": {
+        "sub_queries": [
+          {"id": 0, "query": "过去 6 个月每月销售额 + 大区 + 新品占比", "depends_on": []}
+        ]
+      },
+      "reason": "「假设」「预测」类 query 不拆 - LLM 不能预测未来。能查的是历史数据，让 Aggregator 在合并时基于历史趋势做线性推断。",
+      "key_learning": "LLM 不预测未来。对「假设」「预测」类 query，明确写「能查什么」「LLM 只能基于历史推断」。"
+    }
+  ],
+  "_design_notes": {
+    "split_decision_tree": [
+      "Q1: 这个 query 是不是单 SQL 就能查？",
+      "  → 是：单 sub_query 不拆",
+      "  → 否（需要多个 SQL）→ Q2",
+      "Q2: 多个 SQL 之间有没有数据依赖？",
+      "  → 没有：全并行（无 depends_on）",
+      "  → 有：拆「原始 sub」+「派生 sub depends_on 原始」",
+      "Q3: sub 数量控制在多少？",
+      "  → 经验值：≤ 5，太多 planner 会假阳性拆分"
+    ]
+  }
+}

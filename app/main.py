@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.lifespan import lifespan
+from app.api.routers.admin_router import admin_router
 from app.api.routers.query_router import query_router
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
@@ -35,6 +36,8 @@ def create_app() -> FastAPI:
 
     # 注册路由
     app.include_router(query_router)
+    # 2026-07-17 改造：注册 admin 路由（LLM profile 热切换等运维 API）
+    app.include_router(admin_router)
 
     # 健康检查端点
     @app.get("/health")

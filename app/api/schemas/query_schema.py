@@ -14,3 +14,11 @@ class QuerySchema(BaseModel):
     # 前端请求体中的 query 字段，例如 {"query": "统计华北地区销售额"}
     # max_length=500 防止超大 payload 灌进 jieba + LLM（刀 10）
     query: str = Field(max_length=500, description="用户查询文本")
+
+    # 2026-07-17 改造：Multi-Agent 开关
+    # 默认 False（保持向后兼容，走老 13 节点 graph）
+    # True 时走 supervisor_graph（planner → multi-sub → aggregator → reviewer）
+    use_multi_agent: bool = Field(
+        default=False,
+        description="是否启用 Multi-Agent 模式（planner 拆 sub_query 并行执行）",
+    )
