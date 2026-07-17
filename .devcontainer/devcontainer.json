@@ -2,10 +2,7 @@
   "name": "shopkeeper-agent",
   "image": "mcr.microsoft.com/devcontainers/python:3.13",
   "features": {
-    "docker-in-docker": "latest",
-    "ghcr.io/devcontainers/features/common-utils:2": {
-      "installZsh": false
-    }
+    "docker-in-docker": "latest"
   },
   "postCreateCommand": "bash .devcontainer/setup.sh 2>&1 | tee /tmp/devcontainer-setup.log",
   "waitFor": "postCreateCommand",
