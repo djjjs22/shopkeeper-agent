@@ -67,8 +67,8 @@ function MessageBubbleImpl({
           className={cn(
             "relative border px-5 py-4 shadow-sm",
             isUser
-              ? "border-gray-900 dark:border-gray-200 bg-gray-900 dark:bg-white dark:bg-gray-900 text-white"
-              : "border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/80 dark:bg-gray-800/80 text-gray-900 dark:text-white backdrop-blur",
+              ? "border-gray-900/10 dark:border-white/10 bg-gray-900 dark:bg-gray-900 text-white"
+              : "border-black/5 dark:border-white/10 bg-white/80 dark:bg-gray-900/70 text-gray-900 dark:text-white backdrop-blur-xl shadow-[0_8px_24px_rgba(0,0,0,0.04)]",
           )}
         >
           <div className="flex items-start justify-between gap-3">

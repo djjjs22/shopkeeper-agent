@@ -14,11 +14,11 @@ import { useToast } from "./Toast";
 function ResultTableSkeleton() {
   return (
     <section
-      className="mt-4 overflow-hidden border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/80 dark:bg-gray-900/80 shadow-sm"
+      className="mt-4 overflow-hidden rounded-2xl border border-black/5 bg-white/70 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/5"
       aria-busy="true"
       aria-live="polite"
     >
-      <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-800 px-4 py-3">
+      <div className="flex items-center justify-between border-b border-black/5 px-4 py-3 dark:border-white/10">
         <div className="flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
           <Database className="motion-safe:animate-pulse h-4 w-4 text-apple-blue" aria-hidden="true" />
           查询结果
@@ -28,10 +28,10 @@ function ResultTableSkeleton() {
       <div className="space-y-2.5 p-4">
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="flex gap-3">
-            <div className="motion-safe:animate-pulse h-4 w-20 rounded-xl bg-black/5 dark:bg-white dark:bg-gray-900/8" />
-            <div className="motion-safe:animate-pulse h-4 w-32 rounded-xl bg-black/5 dark:bg-white dark:bg-gray-900/8" />
-            <div className="motion-safe:animate-pulse h-4 w-24 rounded-xl bg-black/5 dark:bg-white dark:bg-gray-900/8" />
-            <div className="motion-safe:animate-pulse h-4 flex-1 rounded-xl bg-black/5 dark:bg-white dark:bg-gray-900/8" />
+            <div className="motion-safe:animate-pulse h-4 w-20 rounded-xl bg-black/5 dark:bg-white/8" />
+            <div className="motion-safe:animate-pulse h-4 w-32 rounded-xl bg-black/5 dark:bg-white/8" />
+            <div className="motion-safe:animate-pulse h-4 w-24 rounded-xl bg-black/5 dark:bg-white/8" />
+            <div className="motion-safe:animate-pulse h-4 flex-1 rounded-xl bg-black/5 dark:bg-white/8" />
           </div>
         ))}
       </div>
@@ -63,13 +63,13 @@ function formatCell(value: unknown) {
 // 零结果空状态：SQL 成功执行但数据库无匹配行
 function EmptyResult() {
   return (
-    <section className="mt-4 overflow-hidden border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/80 dark:bg-gray-900/80 shadow-sm">
-      <div className="flex items-center gap-2 border-b border-gray-200 dark:border-gray-800 px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">
+    <section className="mt-4 overflow-hidden rounded-2xl border border-black/5 bg-white/70 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/5">
+      <div className="flex items-center gap-2 border-b border-black/5 px-4 py-3 text-sm font-semibold text-gray-900 dark:border-white/10 dark:text-white">
         <Database className="h-4 w-4 text-apple-blue" aria-hidden="true" />
         查询结果
       </div>
       <div className="flex flex-col items-center justify-center gap-3 px-6 py-12 text-center">
-        <div className="grid h-12 w-12 place-items-center rounded-full bg-black/5 dark:bg-white dark:bg-gray-900/8 text-gray-500 dark:text-gray-400">
+        <div className="grid h-12 w-12 place-items-center rounded-full bg-black/5 text-gray-500 dark:bg-white/8 dark:text-gray-400">
           <SearchX className="h-6 w-6" aria-hidden="true" />
         </div>
         <div className="space-y-1">
@@ -212,8 +212,8 @@ function ResultTableImpl({
   };
 
   return (
-    <section className="mt-4 overflow-hidden border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/80 dark:bg-gray-900/80 shadow-sm">
-      <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-800 px-4 py-3">
+    <section className="mt-4 overflow-hidden rounded-2xl border border-black/5 bg-white/70 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/5">
+      <div className="flex items-center justify-between border-b border-black/5 px-4 py-3 dark:border-white/10">
         <div className="flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
           <Database className="h-4 w-4 text-apple-blue" aria-hidden="true" />
           查询结果
@@ -227,7 +227,7 @@ function ResultTableImpl({
             <button
               type="button"
               onClick={handleExportCsv}
-              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 transition hover:bg-apple-blue/10 hover:text-apple-blue focus:outline-none focus:ring-2 focus:ring-apple-blue/40"
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-gray-600 transition hover:bg-apple-blue/10 hover:text-apple-blue focus:outline-none focus:ring-2 focus:ring-apple-blue/40 dark:text-gray-400"
               title="导出 CSV（Excel 友好）"
               aria-label="导出 CSV"
             >
@@ -237,7 +237,7 @@ function ResultTableImpl({
             <button
               type="button"
               onClick={handleExportJson}
-              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 transition hover:bg-apple-blue/10 hover:text-apple-blue focus:outline-none focus:ring-2 focus:ring-apple-blue/40"
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-gray-600 transition hover:bg-apple-blue/10 hover:text-apple-blue focus:outline-none focus:ring-2 focus:ring-apple-blue/40 dark:text-gray-400"
               title="导出 JSON（保留原始结构）"
               aria-label="导出 JSON"
             >
@@ -249,13 +249,13 @@ function ResultTableImpl({
       </div>
       <div className="max-h-[360px] overflow-auto">
         <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
-          <thead className="sticky top-0 z-10 bg-[#efe6d8]">
+          <thead className="sticky top-0 z-10 bg-black/[0.03] backdrop-blur-md dark:bg-white/5">
             <tr>
               {columns.map((column) => (
                 <th
                   key={column}
                   scope="col"
-                  className="border-b border-gray-200 dark:border-gray-800 px-4 py-3 font-semibold text-gray-700 dark:text-gray-300"
+                  className="border-b border-black/5 px-4 py-3 text-left font-semibold text-gray-700 dark:border-white/10 dark:text-gray-300"
                 >
                   {highlightCell(column, keywords)}
                 </th>
@@ -264,9 +264,9 @@ function ResultTableImpl({
           </thead>
           <tbody>
             {rows.map((row, rowIndex) => (
-              <tr key={rowIndex} className="odd:bg-white dark:bg-gray-900/80 dark:bg-gray-900/80 even:bg-white dark:bg-gray-900/40 dark:bg-gray-900/40">
+              <tr key={rowIndex} className="transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.03]">
                 {columns.map((column) => (
-                  <td key={column} className="border-b border-gray-900 dark:border-gray-200/5 px-4 py-3 text-gray-800 dark:text-gray-200">
+                  <td key={column} className="border-b border-black/5 px-4 py-3 text-gray-800 dark:border-white/5 dark:text-gray-200">
                     {highlightCell(formatCell(row[column]), keywords)}
                   </td>
                 ))}

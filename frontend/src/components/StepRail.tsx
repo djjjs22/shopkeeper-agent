@@ -27,7 +27,7 @@ function StepRailImpl({ steps = [] }: { steps?: StepState[] }) {
   const sorted = [...steps].sort((a, b) => a.updatedAt - b.updatedAt);
 
   return (
-    <section className="mt-3 border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/70 dark:bg-gray-900/70 px-4 py-3 text-sm">
+    <section className="mt-3 rounded-2xl border border-black/5 bg-white/70 px-4 py-3 text-sm shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/5">
       <div className="mb-2 text-xs font-semibold text-gray-500 dark:text-gray-400">执行流程</div>
       <ol className="space-y-1.5">
         {sorted.map((step, idx) => (
