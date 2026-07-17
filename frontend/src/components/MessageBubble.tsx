@@ -62,10 +62,11 @@ function MessageBubbleImpl({
     <article className={cn("group flex gap-3", isUser && "justify-end")}>
       {!isUser && (
         <div
-          className="mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-white shadow-sm"
+          className="mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-white shadow-[0_4px_12px_rgba(175,82,222,0.35)]"
           style={{
+            // Apple Intelligence 风格的紫粉渐变
             backgroundImage:
-              "linear-gradient(135deg, #48484A 0%, #1C1C1E 100%)",
+              "linear-gradient(135deg, #AF52DE 0%, #FF2D55 100%)",
           }}
         >
           <Bot className="h-4 w-4" aria-hidden="true" />
@@ -76,11 +77,11 @@ function MessageBubbleImpl({
         <div
           className={cn(
             // 用户气泡：iMessage 蓝渐变 + Squircle 大圆角 + 苹果蓝色阴影
-            // 助手气泡：白/70 玻璃 + hairline 边 + Squircle 大圆角 + 苹果黑色阴影
-            "relative px-5 py-4 transition-shadow",
+            // 助手气泡：白/80 玻璃 + hairline 边 + Squircle 大圆角 + 苹果阴影
+            "relative rounded-2xl border px-5 py-4 transition-shadow",
             isUser
-              ? "rounded-2xl rounded-br-md border border-apple-blue/40 text-white shadow-[0_8px_24px_rgba(0,113,227,0.25)] hover:shadow-[0_10px_28px_rgba(0,113,227,0.30)]"
-              : "rounded-2xl rounded-bl-md border border-black/5 bg-white/80 text-gray-900 shadow-[0_8px_24px_rgba(0,0,0,0.04)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5 dark:text-white",
+              ? "border-apple-blue/40 text-white shadow-[0_8px_24px_rgba(0,113,227,0.25)] hover:shadow-[0_10px_28px_rgba(0,113,227,0.30)]"
+              : "border-black/5 bg-white/80 text-gray-900 shadow-[0_8px_24px_rgba(0,0,0,0.04)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5 dark:text-white",
           )}
           style={
             isUser
