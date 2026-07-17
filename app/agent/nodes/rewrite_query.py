@@ -184,6 +184,96 @@ def _resolve_relative_time(text: str) -> tuple[str, TimeRangeState]:
         end_date = today.strftime("%Y-%m-%d")
         text = text.replace("今年", "").strip()
 
+    # ── 绝对时间解析（2026-07-17 修复 P0：2025 Q1 等不被识别）──
+    # 改前问题：用户问"2025 年第一季度 GMV"，rewrite_query 没把绝对时间
+    # 转成 time_range，generate_intent 拿不到 time_range，LLM 自作主张拼
+    # `WHERE order_date BETWEEN ...` → 字段名错（fact_order 没有 order_date，
+    # 是 date_id） → correct_sql 也拿不到表元数据 → 返回中文解释 → run_sql 拦截
+    #
+    # 支持格式：
+    # - "2025 年第一季度" / "2025 年 Q1" / "2025Q1" → 2025-01-01 ~ 2025-03-31
+    # - "2025 年第二季度" / "2025 年 Q2" / "2025Q2" → 2025-04-01 ~ 2025-06-30
+    # - "2025 年" / "2025年" → 2025-01-01 ~ 2025-12-31
+    # - "2025 年 5 月" / "2025年5月" / "2025-05" → 2025-05-01 ~ 2025-05-31
+    # - "2025-01-01 至 2025-03-31" 等日期区间直接保留
+    #
+    # 优先级：标准/相对 模式优先，绝对时间只在没解析到时用
+
+    if not raw_expression:
+        # 季度匹配（年 + Q1~Q4，或者"年第1季度" 也能命中）
+        m = re.search(r"(\d{4})\s*年?\s*[Qq]([1-4])", text)
+        if m:
+            year = int(m.group(1))
+            q = int(m.group(2))
+            # 季度起止月
+            start_month = (q - 1) * 3 + 1
+            end_month = q * 3
+            start = date(year, start_month, 1)
+            # 季度末月最后一天：下季度首日 - 1
+            if q == 4:
+                end = date(year, 12, 31)
+            else:
+                end = date(year, end_month + 1, 1) - timedelta(days=1)
+            raw_expression = f"{year}年第{q}季度"
+            start_date = start.strftime("%Y-%m-%d")
+            end_date = end.strftime("%Y-%m-%d")
+            text = text.replace(m.group(0), "").strip()
+
+    if not raw_expression:
+        # 自然语言季度（"2025 年第一季度" / "2025年第一季度" / "2025 年第 1 季度"）
+        # 关键：必须先于 "2025 年" 匹配，否则会被吞掉
+        # 兼容空格：年/第/数字/季度 之间的空格都可选
+        # 中文数字 一/二/三/四 也要支持
+        m = re.search(r"(\d{4})\s*年?\s*第\s*([一二三四1-4])\s*季度", text)
+        if m:
+            year = int(m.group(1))
+            q_cn = m.group(2)
+            q_map = {"一": 1, "二": 2, "三": 3, "四": 4, "1": 1, "2": 2, "3": 3, "4": 4}
+            q = q_map.get(q_cn)
+            if q is not None:
+                start_month = (q - 1) * 3 + 1
+                end_month = q * 3
+                start = date(year, start_month, 1)
+                if q == 4:
+                    end = date(year, 12, 31)
+                else:
+                    end = date(year, end_month + 1, 1) - timedelta(days=1)
+                raw_expression = f"{year}年第{q}季度"
+                start_date = start.strftime("%Y-%m-%d")
+                end_date = end.strftime("%Y-%m-%d")
+                text = text.replace(m.group(0), "").strip()
+
+    if not raw_expression:
+        # 单月匹配（"2025 年 5 月" / "2025-05"）
+        m = re.search(r"(\d{4})\s*年\s*(\d{1,2})\s*月", text)
+        if not m:
+            m = re.search(r"(\d{4})-(\d{1,2})(?!\d)", text)
+        if m:
+            year = int(m.group(1))
+            month = int(m.group(2))
+            if 1 <= month <= 12:
+                start = date(year, month, 1)
+                # 下个月第一天 - 1
+                if month == 12:
+                    end = date(year, 12, 31)
+                else:
+                    end = date(year, month + 1, 1) - timedelta(days=1)
+                raw_expression = f"{year}年{month}月"
+                start_date = start.strftime("%Y-%m-%d")
+                end_date = end.strftime("%Y-%m-%d")
+                text = re.sub(r"\d{4}\s*年\s*\d{1,2}\s*月", "", text).strip()
+                text = re.sub(r"\d{4}-\d{1,2}(?!\d)", "", text).strip()
+
+    if not raw_expression:
+        # 整年匹配（"2025 年" / "2025年"）—— 但要避免误匹配"2025 年 5 月"（已先匹配）
+        m = re.search(r"(\d{4})\s*年(?!\s*\d)", text)
+        if m:
+            year = int(m.group(1))
+            raw_expression = f"{year}年"
+            start_date = f"{year}-01-01"
+            end_date = f"{year}-12-31"
+            text = text.replace(m.group(0), "").strip()
+
     time_range = TimeRangeState(
         start_date=start_date,
         end_date=end_date,

@@ -78,3 +78,4 @@ docs.zip
 .obsidian/
 skills.zip
 COMMIT_MSG.md
+docker/mysql/dw.sql.bak-*

@@ -5,6 +5,7 @@ SQL 修正节点
 只有 validate_sql 写入错误信息时，LangGraph 才会进入这个分支
 """
 
+import re
 import yaml
 from langchain_core.prompts import PromptTemplate
 from app.core.timing import timed_node
@@ -19,6 +20,22 @@ from app.core.log import logger
 # 详见 app/core/safe_json_parser.py 顶部 + docs/notes/eval_e2e_think兼容改造-20260711.md
 from app.core.safe_json_parser import StripThinkStrParser
 from app.prompt.prompt_loader import load_prompt
+
+
+def _is_sql_like(text: str) -> bool:
+    """判断 LLM 输出是否像 SQL（防止它输出中文解释）
+
+    改前问题（2026-07-17）：correct_sql 跑了 44 秒后输出一段中文解释
+       "由于未提供数据表结构，无法确定..."，被原样写入 state["sql"]，
+       下游 run_sql 的 sql_safety 拦截后给前端返回"未找到数据"。
+       用户看到的不是技术问题，是没数据。
+    改后：用关键字兜底判断。如果不含 SELECT/WITH/USE 等关键字，
+       当成 LLM 放弃治疗，**直接抛错**走 fallback，而不是把中文塞进 sql 字段。
+    """
+    if not text or not isinstance(text, str):
+        return False
+    cleaned = text.strip().upper()
+    return any(cleaned.startswith(kw) for kw in ("SELECT", "WITH", "USE", "SHOW", "DESC", "EXPLAIN"))
 
 
 @timed_node
@@ -78,9 +95,28 @@ async def correct_sql(state: DataAgentState, runtime: Runtime[DataAgentContext])
         )
 
         logger.info(f"校正后的SQL：{result}")
+
+        # 2026-07-17 修复：LLM 输出非 SQL 时直接报"放弃治疗"
+        # 改前：44 秒后输出中文解释，被原样写入 state["sql"]，run_sql 拦截后
+        #   前端看到"未找到数据"，排查时日志里 5 个节点都"正常"返回，根因难查。
+        # 改后：识别到非 SQL 输出就抛错，让 run_sql 走 SELECT 1 兜底链路
+        #   并把错误信息显式传给前端。
+        if not _is_sql_like(result):
+            logger.error(
+                f"{step}: LLM 未返回 SQL，输出前 200 字符：{str(result)[:200]!r}"
+            )
+            raise ValueError(
+                f"correct_sql 节点 LLM 未返回 SQL（输出：{str(result)[:100]}...）"
+            )
+
         writer({"type": "progress", "step": step, "status": "success"})
         return {"sql": result}
     except Exception as e:
         logger.error(f"{step} failed: {e}")
         writer({"type": "progress", "step": step, "status": "error"})
-        raise
+        # 2026-07-17 修复：异常时不抛（让下游 fallback），
+        # 而是返回原 sql + 在 error 里追加说明，方便 run_sql 拦截时把信息传到前端
+        return {
+            "sql": state.get("sql", "SELECT 1 AS fallback"),
+            "error": f"correct_sql 节点失败：{e}",
+        }

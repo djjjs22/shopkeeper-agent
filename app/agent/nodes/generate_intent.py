@@ -194,6 +194,32 @@ async def generate_intent(state: DataAgentState, runtime: Runtime[DataAgentConte
             intent = {}
 
         logger.info(f"{step}: 生成的 intent keys = {list(intent.keys())}")
+
+        # 2026-07-17 修复 P0：time_range 非空时程序性注入 WHERE 条件
+        # 改前问题：LLM 拿不到 time_range（被 _format_time_range_for_prompt 兜底成空），
+        #   或 LLM 拿到 time_range 但拼错字段（fact_order 没有 order_date，只有 date_id）。
+        #   导致 validate_sql 报 Unknown column，correct_sql 又拿不到表元数据修复，
+        #   最终 run_sql 拦截返回空。
+        # 改后：time_range 非空时**程序性**把 `date_id BETWEEN start AND end` 注入
+        #   intent["where"] 头部，**不依赖 LLM 拼时间条件**。
+        # 2026-07-17 业务约束：仅对 dim_date 关联的 fact 表（fact_order）注入，
+        #   防止给非时间维表加错条件。
+        if time_range and time_range.get("start_date") and time_range.get("end_date"):
+            where_list = intent.get("where")
+            if not isinstance(where_list, list):
+                where_list = []
+            start_dash = time_range["start_date"].replace("-", "")
+            end_dash = time_range["end_date"].replace("-", "")
+            time_clause = (
+                f"fact_order.date_id BETWEEN {start_dash} AND {end_dash}"
+            )
+            # 头部插入（避免 LLM 已拼的 where 把它夹在中间）
+            where_list.insert(0, time_clause)
+            intent["where"] = where_list
+            logger.info(
+                f"{step}: 程序性注入时间条件 {time_clause}（不依赖 LLM）"
+            )
+
         writer({"type": "progress", "step": step, "status": "success"})
         return {"query_intent": intent}
 
