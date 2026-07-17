@@ -20,7 +20,6 @@ import { MessageBubble } from "./components/MessageBubble";
 import { RecentHistory } from "./components/RecentHistory";
 import { streamQuery, clearSession, ApiError } from "./lib/agentApi";
 import { mapBackendMessage, mapHttpError, mapJsError } from "./lib/errorMessages";
-import { buildPendingSteps, mergeStepEvent } from "./lib/stepTemplate";
 import { useToast } from "./components/Toast";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { KeyboardShortcutsModal } from "./components/KeyboardShortcutsModal";
@@ -40,6 +39,16 @@ const MAX_RECENT_QUERIES = 8;
 
 function makeId() {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function upsertStep(steps: StepState[] = [], event: Extract<AgentEvent, { type: "progress" }>) {
+  const next = steps.filter((item) => item.step !== event.step);
+  next.push({
+    step: event.step,
+    status: event.status,
+    updatedAt: Date.now(),
+  });
+  return next;
 }
 
 export default function App() {
@@ -120,16 +129,13 @@ export default function App() {
     };
 
     const assistantId = makeId();
-    // 预填完整执行计划（默认 data_query，13 步 + 1 步分类共 14 步），
-    // 全部 pending。后端事件流到来后逐步覆盖状态。
-    // 效果：用户从一开始就能看到系统将要做什么，而不是"等半天看不到东西"。
     const assistantMessage: ChatMessage = {
       id: assistantId,
       role: "assistant",
       content: "正在连接问数智能体...",
       createdAt: Date.now(),
       status: "streaming",
-      steps: buildPendingSteps("data_query"),
+      steps: [],
     };
 
     const controller = new AbortController();
@@ -147,7 +153,7 @@ export default function App() {
             return {
               ...message,
               content: event.status === "running" ? `正在执行：${event.step}` : message.content,
-              steps: mergeStepEvent(message.steps ?? [], event),
+              steps: upsertStep(message.steps, event),
             };
           }
 
