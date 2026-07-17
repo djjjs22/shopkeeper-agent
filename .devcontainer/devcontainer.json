@@ -1,9 +1,12 @@
 {
   "name": "shopkeeper-agent",
-  "image": "mcr.microsoft.com/devcontainers/python:3.13",
-  "features": {
-    "docker-in-docker": "latest"
+  "build": {
+    "dockerfile": "Dockerfile"
   },
+  "runServices": [],
+  "mounts": [
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+  ],
   "postCreateCommand": "bash .devcontainer/setup.sh 2>&1 | tee /tmp/devcontainer-setup.log",
   "waitFor": "postCreateCommand",
   "forwardPorts": [8000, 5173],
