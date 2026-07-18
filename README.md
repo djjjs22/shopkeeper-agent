@@ -1,223 +1,347 @@
-# 电商问数 — 自然语言驱动的智能数据分析 Agent
+# Shopkeeper Agent — 自然语言驱动的电商问数系统
 
-> **一个让非技术人员用大白话查询数据库的 AI Agent 系统**
+> 用户说"统计 2025 年第一季度各大区的 GMV" → 系统自动检索表结构、生成 SQL、安全校验、执行 → 返回结构化结果。
 >
-> 不是简单的"问 LLM → 返回答案"，而是一个完整的 **RAG + Agent 工作流**：
-> 召回相关数据 → 推理生成 SQL → 安全校验 → 执行查询 → 修正重试。
-
-## 一句话介绍
-
-用户用自然语言提问（如"华东地区上个月卖了多少货"），系统自动：
-1. 从元数据知识库中**检索**相关表、字段、指标
-2. 交给 LLM **推理**生成 SQL
-3. **校验**安全性后执行
-4. 返回结构化结果
-
-整个过程对用户完全透明——就像跟数据分析师对话一样。
+> 不是套壳 LLM，而是一个 **RAG + Agent 工作流**：多路召回 → 程序性上下文 → LLM 推理 → 安全校验 → 自动修正 → 反思重试。
 
 ---
 
-## 为什么这是一个"AI Agent"而不是"套壳 LLM"
+## 1. 一句话介绍
 
-| 普通 LLM 调用 | 本项目的 Agent 架构 |
+**Shopkeeper Agent** 是一个电商问数系统。业务方用大白话提问，系统自动从元数据知识库检索表/字段/指标，推理生成 SQL，过三层安全校验后执行查询，按需触发自动修正与反思重试。
+
+数据规模：**7.2 万单 / 12 个地区 / 120 SKU / 500 客户**（2025-01 ~ 2026-07）。
+
+---
+
+## 2. 为什么这是 AI Agent（不是套壳 LLM）
+
+| 套壳 LLM | 本项目 |
 |---|---|
-| 用户问题 → LLM → 答案 | 用户问题 → **多路召回** → **过滤筛选** → **LLM 推理** → **安全校验** → **自动修正** → 执行 |
-| LLM 凭"记忆"猜表结构 | Agent 从元数据知识库**精确检索**表结构 |
-| 无法验证 SQL 正确性 | **EXPLAIN 预演 + 安全防火墙 + 自动修正重试** |
-| 直接执行，有安全风险 | 三层安全防护：只允许只读查询 |
-| 单次调用 | **11 节点有向图**，失败自动回退重试 |
+| LLM 凭"记忆"猜表结构 | Agent 从元数据知识库**精确检索**表/字段/值 |
+| 单次调用、无回退 | **17 节点有向图**，失败自动回退重试 |
+| SQL 不可信也直接执行 | **EXPLAIN 预演 + 三层安全防火墙 + 自动修正回路** |
+| 弱模型强模型混用 | **Profile Registry**：按节点路由到 cheap/strong 模型，省 token 不省能力 |
+| 单 sub_query 走老路 | **Multi-Agent 模式**：planner 拆 sub → Send API 并行跑 → aggregator 合并 → reviewer 评分（< 0.7 触发反思回路） |
 
 ---
 
-## AI Agent 架构设计
+## 3. 架构
+
+### 3.1 两层图
 
 ```
-                          ┌──────────────────────────┐
-                          │     用户自然语言问题        │
-                          │   "华东上个月卖了多少货"    │
-                          └────────────┬─────────────┘
-                                       ↓
-                          ┌──────────────────────────┐
-                          │   ① 关键词提取 (Jieba)     │
-                          │   华东 / 上个月 / 卖 / 货    │
-                          └────────────┬─────────────┘
-                                       ↓
-            ┌──────────────────────────┼──────────────────────────┐
-            ↓                          ↓                          ↓
-   ┌────────────────┐       ┌────────────────┐       ┌────────────────┐
-   │ ② 字段召回      │       │ ③ 取值召回      │       │ ④ 指标召回      │
-   │ Qdrant 向量搜索 │       │ ES 全文搜索     │       │ Qdrant 向量搜索 │
-   │ "卖了多少"→     │       │ "华东"→         │       │ "GMV"→         │
-   │ order_amount   │       │ dim_region      │       │ SUM(amount)    │
-   └───────┬────────┘       └───────┬────────┘       └───────┬────────┘
-            ↓                          ↓                          ↓
-            └──────────────────────────┼──────────────────────────┘
-                                       ↓
-                          ┌──────────────────────────┐
-                          │ ⑤ 合并召回结果 + 过滤无关信息 │
-                          │ ⑥ 补充上下文（日期/数据库环境）│
-                          └────────────┬─────────────┘
-                                       ↓
-                          ┌──────────────────────────┐
-                          │ ⑦ LLM 推理生成 SQL         │
-                          │ DeepSeek-v4-pro           │
-                          │ Prompt 含：表结构+字段+指标  │
-                          └────────────┬─────────────┘
-                                       ↓
-                          ┌──────────────────────────┐
-                          │ ⑧ EXPLAIN 语法校验         │
-                          │ 失败 → ⑨ LLM 修正 → 再校验  │
-                          └────────────┬─────────────┘
-                                       ↓
-                          ┌──────────────────────────┐
-                          │ ⑩ SQL 安全防火墙           │
-                          │ 黑名单+白名单+注入检测       │
-                          └────────────┬─────────────┘
-                                       ↓
-                          ┌──────────────────────────┐
-                          │ ⑪ 执行 SQL → 流式返回结果   │
-                          └──────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  Supervisor Graph（multi-agent 入口，use_multi_agent=true）  │
+│                                                             │
+│   planner → data_agent → aggregator → reviewer              │
+│              ↓                                              │
+│         (Send API 拆 sub_query，并行跑下面的 graph)            │
+└─────────────┬───────────────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────────────────────────────┐
+│  Data Graph（17 节点单 sub_query 链路）                      │
+│                                                             │
+│   classify_intent → rewrite_query ─┬→ respond_chitchat      │
+│                                     ├→ respond_metadata     │
+│                                     ↓                        │
+│                          extract_keywords ─┐                │
+│                                            ↓                 │
+│   recall_column ┐  recall_value ┐  recall_metric (三路)      │
+│         ↓        ↓        ↓                                │
+│              merge_retrieved_info → filter → add_extra_ctx  │
+│                            ↓                                │
+│                     generate_intent → generate_sql          │
+│                            ↓                                │
+│       validate_sql ⇄ correct_sql  (失败回路)                │
+│                            ↓                                │
+│                          run_sql                            │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 核心设计理念
+### 3.2 多路召回 + 混合检索
 
-**检索增强生成（RAG）**：LLM 不直接"猜"数据库结构。每次查询前，系统先从知识库（向量库 + 全文索引）中精确检索相关元数据，再拼接进 Prompt。这保证了 SQL 的**表名、字段名、业务口径**都来自真实数据源，而不是 LLM 的幻觉。
+```
+                  用户问题
+                     ↓
+              Jieba 关键词提取
+                     ↓
+      ┌──────────────┼──────────────┐
+      ↓              ↓              ↓
+  Qdrant 向量     Elasticsearch    Qdrant 向量
+  (字段名)        (枚举值)         (指标名)
+  order_amount    华东/华南        GMV
+      ↓              ↓              ↓
+      └──────────────┼──────────────┘
+                     ↓
+              merge + filter
+                     ↓
+       add_extra_context (时间/库元信息)
+                     ↓
+                 LLM 推理
+```
 
-**混合检索（Hybrid Search）**：单一检索方式有盲区。
-- **向量搜索**（Qdrant）：理解"销售额"≈"order_amount"这种语义映射。但枚举值"华东/华南"语义太近，会混淆。
-- **全文搜索**（Elasticsearch + IK 分词）：精确匹配"华东"这个具体值。但搜不到"GMV"这种抽象概念。
-- 两种方式互补，确保无论用户说什么表达都能精准命中。
+**为什么用混合检索**：
+- 向量搜索理解"销售额"≈"order_amount"这种语义，但**"华东/华南"向量太近**会混淆
+- 全文搜索**精确匹配**枚举值，但**搜不到"GMV"这种抽象概念**
+- 两者互补——**Qdrant 管语义、ES 管精确**
 
-**工作流编排（LangGraph）**：11 个节点组成有向图，不是简单的顺序调用。每个节点有明确的输入/输出状态（TypedDict），节点间按照"成功→下一步 / 失败→修正→重试"的图结构流转。比如 SQL 校验失败不会直接报错，而是把错误信息回传给 LLM 修正后再试。
+### 3.3 LLM Profile Registry（按节点路由模型）
 
-**安全防御（SQL Firewall）**：LLM 的输出不可信。执行前必须过三层检查：
-1. 关键字黑名单（拦截 DROP/DELETE/UPDATE/INSERT/ALTER 等 13 个危险词）
-2. 只读白名单（只允许 SELECT/WITH 开头的查询）
-3. SQL 注入检测（UNION SELECT / OR '1'='1' / -- 注释截断）
+```yaml
+llm_profiles:
+  cheap:  { model: MiniMax-M3,    用途: 闲聊/分类 }
+  strong: { model: MiniMax-M2.7,  用途: SQL/纠错/改写 }
+
+node_profiles:  # 2 cheap + 11 strong
+  respond_chitchat: cheap   # 闲聊简短，弱模型够用 + 省 token
+  classify_intent:  cheap   # 5 选 1 分类，cheap 准确度足够，省 ~2.5s
+  # 其余 11 个节点全部 strong：filter_* / extract_keywords /
+  # generate_intent / correct_sql / rewrite_query / planner /
+  # aggregator / reviewer
+```
+
+**热切换**：`POST /api/admin/llm-profile {node, profile}` 改完立即生效，不用重启。
+
+### 3.4 反思回路（Multi-Agent 模式）
+
+```
+reviewer 评分
+  ├─ ≥ 0.7  → END
+  └─ < 0.7  → 触发反思，max_loop=2
+                重新跑 planner + data_agent
+```
 
 ---
 
-## 技术栈选型理由
+## 4. 安全设计
 
-| 组件 | 选择 | 为什么不用替代方案 |
-|------|------|-------------------|
-| **Agent 框架** | LangGraph | AutoGPT 太重，单 Agent 又不具备工作流回退能力。LangGraph 用有向图定义节点+边，天然支持失败重试、条件分支 |
-| **LLM 模型** | DeepSeek-v4-pro | 性价比最高，SQL 生成能力强，中文理解优于 Llama 系列。通过 opencode.ai 中转调用 |
-| **向量模型** | bge-large-zh-v1.5 (1024维) | 中文语义理解最好的开源模型之一。OpenAI text-embedding 要收费且中文效果不如 bge |
-| **向量化服务** | TEI (HuggingFace) | 自建 Embedding 服务，不依赖第三方 API。HuggingFace TEI 是 HuggingFace 官方推出的高性能推理引擎 |
-| **向量数据库** | Qdrant | Milvus 太重（需要 etcd + Pulsar），Chroma 功能太弱。Qdrant 单容器部署、Rust 实现性能好、支持过滤条件 |
-| **全文检索** | Elasticsearch + IK 分词 | 中文分词是刚需，IK 是社区最成熟的方案。Solr 社区已经凉了 |
-| **后端框架** | FastAPI | Flask 不支持 async，Django 太重。FastAPI 原生 async + Pydantic 验证 + 自动 OpenAPI 文档 |
-| **包管理** | uv (Rust) | pip 太慢。uv 快 10-100 倍，自带虚拟环境管理和锁文件 |
+LLM 输出不可信。SQL 执行前**过三层**：
+
+| 层级 | 机制 | 做法 |
+|---|---|---|
+| 1 | **关键字黑名单** | 拦截 DROP / DELETE / UPDATE / INSERT / ALTER 等写操作 |
+| 2 | **只读白名单** | 只允许 SELECT / WITH 开头的查询 |
+| 3 | **SQL 注入检测** | UNION SELECT / OR '1'='1' / `--` 注释截断 |
+| 4 | **EXPLAIN 预演** | 不实际执行，MySQL 只解析语法 |
+| 5 | **自动修正回路** | 语法错 → 错误信息 + 原 SQL 回传 LLM 修正 → 再 EXPLAIN |
+
+字符串预处理：**先移除引号内容再匹配关键字**（防误杀 `WHERE name='DROP ME'`）。
 
 ---
 
-## 快速开始
+## 5. 技术栈
 
-### 1. 环境要求
-```bash
-# Python 3.13+
-# Docker Desktop
-# Node.js 22+（仅前端）
-```
+| 组件 | 选择 | 为什么 |
+|---|---|---|
+| Agent 框架 | **LangGraph** | 有向图 + 条件分支 + 状态机，天然支持失败回退 |
+| LLM | **MiniMax-M3 / M2.7** | 国产、便宜、中文强；通过 minimaxi 官方 API |
+| Embedding | **bge-large-zh-v1.5** (1024 维) | 中文 SOTA 开源模型 |
+| 向量推理服务 | **TEI** (HuggingFace) | 自建，零外部依赖，CPU 也能跑 |
+| 向量库 | **Qdrant** | Rust 实现性能好，单容器部署，支持过滤 |
+| 全文检索 | **Elasticsearch + IK 分词** | 中文分词刚需，IK 是社区最稳的 |
+| 后端 | **FastAPI** | 原生 async + Pydantic 校验 + 自动 OpenAPI |
+| 前端 | **React + Vite + TypeScript** | pnpm workspace |
+| 包管理 | **uv** (Rust) | 比 pip 快 10-100×，自带 venv + lockfile |
+| 关键词提取 | **Jieba + 自定义词典** | `conf/jieba_userdict.txt` 兜业务术语 |
 
-### 2. 启动基础设施（一键）
+---
+
+## 6. 快速开始
+
+### 6.1 环境要求
+
+- Python 3.13+
+- Docker Desktop
+- Node.js 22+（前端用 pnpm 10+）
+- 8GB+ 内存（全栈 6 个容器）
+
+### 6.2 启动基础设施
+
 ```bash
 cd docker
 docker compose up -d
-# 启动 MySQL + Qdrant + Elasticsearch + TEI Embedding
+# 启动：MySQL + Elasticsearch + Kibana + Qdrant + TEI Embedding + Redis
+# 共 6 个容器
 ```
 
-### 3. 安装 Python 依赖
-```bash
-uv sync
-```
+首次启动会自动建表 + 灌入 7.2 万单种子数据（`docker/mysql/dw.sql`）。
 
-### 4. 下载 Embedding 模型（国内镜像加速）
+### 6.3 下载 Embedding 模型
+
 ```bash
 HF_ENDPOINT=https://hf-mirror.com uv run hf download \
   BAAI/bge-large-zh-v1.5 \
   --local-dir docker/embedding/bge-large-zh-v1.5
 ```
 
-### 5. 配置 LLM API Key
-编辑 `.env`：
+### 6.4 配置 LLM
+
+编辑 `.env`（参考 `.env.example`）：
+
 ```env
-LLM_API_KEY=your_api_key_here
+# Cheap profile（弱模型，闲聊/分类）
+LLM_CHEAP_MODEL_NAME=MiniMax-M3
+LLM_CHEAP_BASE_URL=https://api.minimaxi.com/v1
+LLM_CHEAP_API_KEY=<your-key>
+
+# Strong profile（强模型，SQL/改写/纠错）
+LLM_STRONG_MODEL_NAME=MiniMax-M2.7
+LLM_STRONG_BASE_URL=https://api.minimaxi.com/v1
+LLM_STRONG_API_KEY=<your-key>
+
+DB_PASSWORD=dili123
 ```
 
-### 6. 构建元数据知识库
+**Mac 端 MySQL 默认 3307 端口，Windows 端 3306 端口**——靠 `DB_PORT` 环境变量切换。
+
+### 6.5 装依赖 + 构建知识库
+
 ```bash
+# Python 依赖
+uv sync
+
+# 构建元数据知识库（一次性，把表/字段/指标写入 MySQL → Qdrant → ES）
 uv run python -m app.scripts.build_meta_knowledge -c conf/meta_config.yaml
-# 将表结构写入 MySQL → 向量写入 Qdrant → 取值写入 ES
 ```
 
-### 7. 启动服务
+### 6.6 启动服务
+
 ```bash
-# 后端（终端1）
+# 后端（终端 1）
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 
-# 前端（终端2）
+# 前端（终端 2）
 cd frontend && pnpm install && pnpm dev
 ```
 
-访问 http://localhost:5173 即可体验。
+打开 `http://localhost:5173` 即可体验。
 
 ---
 
-## 项目结构
+## 7. 项目结构
 
 ```
 shopkeeper-agent/
 ├── app/
-│   ├── agent/           # 🧠 LangGraph Agent 工作流
-│   │   ├── nodes/       # 11 个处理节点（召回/生成/校验/执行）
-│   │   ├── graph.py     # 有向图编排（节点+边+条件分支）
-│   │   ├── state.py     # Agent 状态定义（TypedDict）
-│   │   └── llm.py       # LLM 客户端封装
-│   ├── core/            # 🛡️ SQL 安全防火墙
-│   ├── repositories/    # 仓储层（MySQL/Qdrant/ES 抽象）
-│   ├── clients/         # 基础设施客户端管理
-│   ├── api/             # FastAPI 路由 + SSE 流式
-│   ├── services/        # 业务逻辑层
-│   └── entities/        # 领域实体（pydantic）
-├── prompts/             # 🎯 LLM Prompt 模板（可插拔）
-├── tests/               # 🧪 单元测试（20 用例，pytest + ruff）
-├── docker/              # 🐳 Docker Compose 五容器编排
-├── frontend/            # 🖥️ React 聊天界面
-├── docs/notes/          # 📚 学习笔记 + 面试题库
-└── conf/                # ⚙️ 元数据配置（表/字段/指标定义）
+│   ├── agent/                  # Agent 工作流
+│   │   ├── graph.py            # 17 节点单 sub_query 主图
+│   │   ├── supervisor_graph.py # Multi-Agent 顶层图（planner/aggregator/reviewer）
+│   │   ├── data_subgraph.py    # 前置/后置 subgraph（按需复用）
+│   │   ├── state.py            # LangGraph TypedDict 状态
+│   │   ├── context.py          # Runtime Context
+│   │   ├── llm.py              # LLM 客户端 + Profile Registry
+│   │   ├── llm_callbacks.py    # Token/latency 监控 callback
+│   │   └── nodes/              # 20 个业务节点 + 1 个 _recall_helpers 内部辅助
+│   ├── api/                    # FastAPI 路由 + SSE 流式
+│   │   ├── routers/            # query_router / admin_router
+│   │   ├── schemas/            # Pydantic schema
+│   │   ├── lifespan.py
+│   │   └── dependencies.py
+│   ├── services/               # 业务逻辑层
+│   │   ├── query_service.py    # 单 sub_query + multi-agent 入口
+│   │   ├── sql_template.py
+│   │   ├── date_resolver.py
+│   │   ├── metric_resolver.py
+│   │   ├── schema_resolver.py
+│   │   ├── session_store.py    # Redis 会话
+│   │   ├── meta_knowledge_service.py
+│   │   └── scheduler.py        # APScheduler 归档
+│   ├── repositories/           # 仓储层
+│   │   ├── mysql/              # meta + dw
+│   │   ├── es/                 # value_es_repository
+│   │   └── qdrant/             # column_qdrant / metric_qdrant
+│   ├── clients/                # 基础设施 client manager
+│   │   ├── embedding_client_manager.py
+│   │   ├── es_client_manager.py
+│   │   ├── mysql_client_manager.py
+│   │   ├── qdrant_client_manager.py
+│   │   └── redis_client_manager.py
+│   ├── core/                   # 核心工具
+│   │   ├── sql_safety.py       # 三层防火墙
+│   │   ├── safe_json_parser.py # 兼容 <think> 块
+│   │   ├── pydantic_parser.py
+│   │   ├── retry.py            # 重试 + 指数退避
+│   │   ├── log.py
+│   │   └── timing.py
+│   ├── entities/               # Pydantic 领域实体
+│   ├── models/                 # SQLAlchemy ORM
+│   ├── middleware/
+│   ├── scripts/                # 一次性脚本
+│   │   ├── build_meta_knowledge.py  # 首次部署入口
+│   │   └── archive_sessions.py      # scheduler 调用
+│   ├── conf/                   # 配置加载
+│   └── prompt/                 # Prompt 加载器
+├── conf/                       # 配置 + Jieba 词典
+│   ├── app_config.yaml
+│   ├── meta_config.yaml
+│   └── jieba_userdict.txt
+├── prompts/                    # 14 个 Prompt 模板（可插拔）
+├── tests/                      # 17 个 pytest 用例 + 5 个 eval 工具
+├── docker/
+│   ├── docker-compose.yaml     # 6 容器编排
+│   ├── mysql/                  # dw.sql (7.3MB) + gen_dw_sql.py
+│   ├── elasticsearch/
+│   └── embedding/              # bge-large-zh-v1.5
+├── frontend/                   # React + Vite + TypeScript
+├── docs/                       # RFC + 架构设计 + 笔记
+├── main.py
+├── pyproject.toml
+└── .devcontainer/              # GitHub Codespace 部署
 ```
 
 ---
 
-## 安全特性（Agent 专属）
+## 8. Multi-Agent 模式
 
-| 层级 | 机制 | 具体做法 |
-|------|------|----------|
-| 语法校验 | `EXPLAIN` 预演 | 不实际执行，MySQL 只检查语法 |
-| 自动修正 | LLM 重试 | 语法错 → 把错误信息+原 SQL 回传 LLM 修正 |
-| 安全防火墙 | 三层检查 | ①关键字黑名单 ②只读白名单 ③注入检测 |
-| 防误杀 | 字符串预处理 | 先移除引号内容再匹配关键字 |
-| 单元测试 | 20 个用例 | 覆盖正常/异常/边界/防误杀场景 |
+`POST /api/query` 加 `use_multi_agent=true` 走 supervisor_graph：
 
----
+```json
+{
+  "query": "2025 Q1 各大区 GMV",
+  "use_multi_agent": true,
+  "session_id": "demo-001"
+}
+```
 
-## 面试准备
+流程：
+1. **Planner** 拆 sub_query（多数单 sub 直通，不调 LLM）
+2. 多 sub 时用 LangGraph **Send API 并行跑** data_graph
+3. **Aggregator** 合并 sub 结果
+4. **Reviewer** 评分（< 0.7 触发反思回路，max_loop=2）
 
-项目附带完整学习文档：
-
-| 文档 | 内容 |
-|------|------|
-| `docs/notes/校招面试题库.md` | 42 题 8 分类，3 个核心故事 |
-| `docs/notes/藤子的Python成长笔记-全记录.md` | 40 个 Python 知识点速查 |
-| `docs/notes/完整代码变更档案-20260629.md` | 11 个文件逐行对比 |
-| `docs/notes/SQL安全加固-代码学习笔记.md` | 安全模块逐行注释 |
-| `docs/notes/SQL安全设计决策-Grill记录.md` | 设计决策与取舍 |
-| `docs/notes/单元测试落地记录-20260630.md` | 测试驱动开发记录 |
+`use_multi_agent=false`（默认）走单 sub_query 路径，**端到端平均 ~3s**（单 LLM 节点 3-5s + 召回 < 200ms）。
 
 ---
 
-## License
+## 9. 测试
+
+```bash
+# 单元测试
+uv run pytest tests/ -v
+
+# 评估脚本
+uv run python tests/eval_e2e.py       # 端到端 query 正确率
+uv run python tests/eval_recall.py    # 三路召回命中率
+uv run python tests/eval_comparison.py # single-agent vs multi-agent
+```
+
+**19 个测试文件 / 165 个测试函数**（参数化覆盖）：SQL 安全（关键字/白名单/注入/防误杀）/ Jieba 关键词 / 时间解析 / 评估器 / Prompt 加载 / 路由。
+
+---
+
+## 10. 演进路线
+
+| 阶段 | 状态 | 描述 |
+|---|---|---|
+| 单 sub_query graph | ✅ | 17 节点主图，稳定生产 |
+| Multi-Agent 模式 | ✅ | supervisor_graph 入口，opt-in |
+| LLM Profile Registry | ✅ | 按节点路由 cheap/strong，热切换 |
+| Function Calling | 🚧 计划 | 业务术语查询 + 元数据版本检查工具 |
+| NL2SQL 公开 benchmark | 🚧 计划 | BIRD / Spider 子集评估 |
+
+---
+
+## 11. License
 
 MIT
