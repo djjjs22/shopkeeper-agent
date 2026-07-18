@@ -89,17 +89,20 @@
 ### 3.3 LLM Profile Registry（按节点路由模型）
 
 ```yaml
+# 两个 profile 槽位（具体模型走 .env 注入，不在 yaml 里写死）
 llm_profiles:
-  cheap:  { model: MiniMax-M3,    用途: 闲聊/分类 }
-  strong: { model: MiniMax-M2.7,  用途: SQL/纠错/改写 }
+  cheap:  { 用途: 闲聊/分类,  timeout: 15s,  max_tokens: 500 }
+  strong: { 用途: SQL/纠错/改写, timeout: 30s,  max_tokens: 2000 }
 
-node_profiles:  # 2 cheap + 11 strong
+node_profiles:  # 2 cheap + 9 strong
   respond_chitchat: cheap   # 闲聊简短，弱模型够用 + 省 token
   classify_intent:  cheap   # 5 选 1 分类，cheap 准确度足够，省 ~2.5s
-  # 其余 11 个节点全部 strong：filter_* / extract_keywords /
-  # generate_intent / correct_sql / rewrite_query / planner /
-  # aggregator / reviewer
+  # 其余 9 个节点全部 strong：filter_table / filter_metric /
+  # extract_keywords / generate_intent / correct_sql / rewrite_query /
+  # planner / aggregator / reviewer
 ```
+
+**设计意图**：不是所有节点都需要强模型。闲聊 / 5 选 1 分类这种"短答 + 路径少"的，弱模型省 token；SQL 生成 / 反思评分这种"长推理 + 高容错"的，强模型保证质量。**模型名走 `.env` 注入**（`LLM_CHEAP_MODEL_NAME` / `LLM_STRONG_MODEL_NAME`），换模型不用改 yaml。
 
 **热切换**：`POST /api/admin/llm-profile {node, profile}` 改完立即生效，不用重启。
 
@@ -135,7 +138,7 @@ LLM 输出不可信。SQL 执行前**过三层**：
 | 组件 | 选择 | 为什么 |
 |---|---|---|
 | Agent 框架 | **LangGraph** | 有向图 + 条件分支 + 状态机，天然支持失败回退 |
-| LLM | **MiniMax-M3 / M2.7** | 国产、便宜、中文强；通过 minimaxi 官方 API |
+| LLM | **Profile Registry（cheap / strong 两槽位）** | 按节点路由——闲聊/分类用 cheap，SQL/纠错/改写用 strong；模型名走 `.env` 注入，换模型不改 yaml |
 | Embedding | **bge-large-zh-v1.5** (1024 维) | 中文 SOTA 开源模型 |
 | 向量推理服务 | **TEI** (HuggingFace) | 自建，零外部依赖，CPU 也能跑 |
 | 向量库 | **Qdrant** | Rust 实现性能好，单容器部署，支持过滤 |
@@ -177,18 +180,18 @@ HF_ENDPOINT=https://hf-mirror.com uv run hf download \
 
 ### 6.4 配置 LLM
 
-编辑 `.env`（参考 `.env.example`）：
+编辑 `.env`（参考 `.env.example`）—— 模型名 / base_url / api_key 都在 `.env` 里注入，不在 yaml 写死：
 
 ```env
 # Cheap profile（弱模型，闲聊/分类）
-LLM_CHEAP_MODEL_NAME=MiniMax-M3
-LLM_CHEAP_BASE_URL=https://api.minimaxi.com/v1
-LLM_CHEAP_API_KEY=<your-key>
+LLM_CHEAP_MODEL_NAME=<cheap-model>
+LLM_CHEAP_BASE_URL=<cheap-base-url>
+LLM_CHEAP_API_KEY=<cheap-api-key>
 
 # Strong profile（强模型，SQL/改写/纠错）
-LLM_STRONG_MODEL_NAME=MiniMax-M2.7
-LLM_STRONG_BASE_URL=https://api.minimaxi.com/v1
-LLM_STRONG_API_KEY=<your-key>
+LLM_STRONG_MODEL_NAME=<strong-model>
+LLM_STRONG_BASE_URL=<strong-base-url>
+LLM_STRONG_API_KEY=<strong-api-key>
 
 DB_PASSWORD=dili123
 ```
