@@ -220,3 +220,47 @@
 4. LLM 输出格式必须 prompt 强约束（千分位、单位换算等"可读性"包装是默认行为）
 5. jinja2 优于 f-string：嵌套 JSON 字面量不需要任何转义
 6. Prompt 边界示例的覆盖率很重要：GMV 是 data_query，环比增长率也应该是
+
+---
+
+## ⚠️ 前后端双进程重启（已踩坑 2 次，必看）
+
+shopkeeper-agent 是双进程项目，**两个服务都要重启**，缺一不可：
+
+| 服务 | 端口 | 启动命令 | 工作目录 |
+|---|---|---|---|
+| **后端 uvicorn** | 8000 | `.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload` | `D:\shopkeeper-agent\` |
+| **前端 Vite** | 5173 | `pnpm dev --host 0.0.0.0` | `D:\shopkeeper-agent\frontend\` |
+
+### 历史
+- 2026-07-17：uvicorn 重启踩坑（端口 10013）
+- **2026-07-20 又踩**：只重启了 uvicorn，前端 Vite 没重启 → 用户访问 5173 报 ERR_CONNECTION_REFUSED → 反馈"你关闭了吗"
+
+### ⚡ 关键机制
+- `run_in_background=true` 启动的 Bash 任务，**会话结束时会被自动清理**
+- 清理后台任务时，启动的子进程（uvicorn / vite）一起退出
+- **用户的"项目进不去了，你关闭了吗"= 服务被清理了**
+
+### 应对（每次会话都要做）
+1. **会话开始先确认两个服务都在跑**：
+   ```powershell
+   Get-NetTCPConnection -LocalPort 8000,5173 -State Listen
+   ```
+2. **启动/重启时都用 `run_in_background=true`**，避免阻塞主线程
+3. **告诉用户两个 URL**：前端 `http://localhost:5173/`，后端 API 通过前端代理（`vite.config.ts` 里的 `VITE_DEV_PROXY_TARGET`，默认 `http://127.0.0.1:8000`）
+
+---
+
+## 绝对时间解析修复（2026-07-20 17:26 bug）
+
+**bug**：`query="查询华东2025年1月的环比增长率"` → rewrite_query 没解析绝对时间 → `_resolve_relative_time` 只匹配相对时间 → time_range 全空 → SQL 没 WHERE 时间 → 兜底"未查到"
+
+**修复（2 处改动）**：
+- `app/agent/nodes/rewrite_query.py` `_resolve_relative_time` 新增 4 种绝对时间正则（YYYY-MM-DD / YYYY年M月 / YYYY年Q季 / YYYY年），**优先级最高**避免被相对时间"误吃"
+- `prompts/rewrite_query.prompt` 加"绝对时间"段落，告诉 LLM 绝对时间保持不变（程序识别）
+
+**验证**：9 个测试用例（2025年1月 / 2025-01 / 2025/03 / 2025年Q2 / 2025-Q1 / 2025年 / 2025-01-15 / 上月 / 最近7天）+ 27 个非 LLM pytest 全过无回归
+
+**设计原则**：
+- 相对时间 vs 绝对时间 是两个独立维度
+- prompt 标准化对照表必须**穷举**所有支持的格式，未列出的 LLM 不知道怎么"标准化"

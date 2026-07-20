@@ -78,6 +78,8 @@ def _resolve_relative_time(text: str) -> tuple[str, TimeRangeState]:
         上一个自然月 / 当前自然月 / 当前自然季度 / 上一个自然年 / 去年同一时期
     - 扩展模式（P0 扩展，2026-07-14）：
         最近 N 天 / 过去 N 天 / 本周 / 本月 / 今年
+    - 绝对时间模式（2026-07-20 新增）：
+        YYYY年M月 / YYYY-MM / YYYY/MM / YYYY年Q季 / YYYY年 / YYYY-MM-DD
     """
     import re
 
@@ -85,6 +87,72 @@ def _resolve_relative_time(text: str) -> tuple[str, TimeRangeState]:
     start_date = ""
     end_date = ""
     raw_expression = ""
+
+    # ── 绝对时间模式（2026-07-20 新增）──
+    # 处理 "2025年1月"、"2025-01"、"2025/Q1"、"2025年Q1"、"2025年"、"2025-01-15" 等
+    # 优先级最高：用户的"过去某年某月"是精确意图，不能跟"上月"混淆
+    if not raw_expression:
+        # YYYY-MM-DD（精确日期，区间是单日）
+        m = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", text)
+        if m:
+            year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            try:
+                start = date(year, month, day)
+                end = start
+                start_date = start.strftime("%Y-%m-%d")
+                end_date = end.strftime("%Y-%m-%d")
+                raw_expression = f"{year}-{month:02d}-{day:02d}"
+                text = re.sub(r"\d{4}-\d{1,2}-\d{1,2}", "", text).strip()
+            except ValueError:
+                pass  # 非法日期（如 2025-02-30）让下面继续匹配
+
+    if not raw_expression:
+        # YYYY年M月 或 YYYY-M 或 YYYY/M（精确年月）
+        m = re.search(r"(\d{4})\s*[年\-/]\s*(\d{1,2})\s*月?", text)
+        if m:
+            year, month = int(m.group(1)), int(m.group(2))
+            try:
+                start = date(year, month, 1)
+                # 月末：下个月第1天减1天（2月跨年也正确）
+                if month == 12:
+                    end = date(year + 1, 1, 1) - timedelta(days=1)
+                else:
+                    end = date(year, month + 1, 1) - timedelta(days=1)
+                start_date = start.strftime("%Y-%m-%d")
+                end_date = end.strftime("%Y-%m-%d")
+                raw_expression = f"{year}年{month}月"
+                text = re.sub(r"\d{4}\s*[年\-/]\s*\d{1,2}\s*月?", "", text).strip()
+            except ValueError:
+                pass
+
+    if not raw_expression:
+        # YYYY年Q季 或 YYYY-Q（季度）
+        m = re.search(r"(\d{4})\s*[年\-/]\s*Q\s*([1-4])", text, re.IGNORECASE)
+        if m:
+            year, q = int(m.group(1)), int(m.group(2))
+            quarter_start_month = (q - 1) * 3 + 1
+            quarter_end_month = q * 3
+            start = date(year, quarter_start_month, 1)
+            if quarter_end_month == 12:
+                end = date(year + 1, 1, 1) - timedelta(days=1)
+            else:
+                end = date(year, quarter_end_month + 1, 1) - timedelta(days=1)
+            start_date = start.strftime("%Y-%m-%d")
+            end_date = end.strftime("%Y-%m-%d")
+            raw_expression = f"{year}年Q{q}"
+            text = re.sub(r"\d{4}\s*[年\-/]\s*Q\s*[1-4]", "", text, flags=re.IGNORECASE).strip()
+
+    if not raw_expression:
+        # YYYY年 单独（全年）
+        m = re.search(r"(\d{4})\s*年(?!\d)", text)
+        if m:
+            year = int(m.group(1))
+            start = date(year, 1, 1)
+            end = date(year, 12, 31)
+            start_date = start.strftime("%Y-%m-%d")
+            end_date = end.strftime("%Y-%m-%d")
+            raw_expression = f"{year}年"
+            text = re.sub(r"\d{4}\s*年(?!\d)", "", text).strip()
 
     # ── 标准模式（保持原样，不重写）──
 

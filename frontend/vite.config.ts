@@ -7,7 +7,9 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const backend = env.VITE_DEV_PROXY_TARGET || "http://127.0.0.1:8000";
+  // 2026-07-20 注：8000 端口被 uvicorn 旧进程占用成僵尸 socket，
+  // 临时改用 8001。下次启动 uvicorn 应该先用 SO_REUSEADDR 或彻底释放 socket。
+  const backend = env.VITE_DEV_PROXY_TARGET || "http://127.0.0.1:8001";
 
   return {
     plugins: [react()],

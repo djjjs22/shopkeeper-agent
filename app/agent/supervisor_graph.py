@@ -238,9 +238,17 @@ async def _gather_sub_results(state: MultiAgentState, runtime: Runtime[DataAgent
         f"总耗时 {sum(r['duration_ms'] for r in ordered)} ms"
     )
     # 保留共享前置结果到 state —— reviewer retry 时复用，避免再跑 16s
+    # ⚠️ 2026-07-20 修复：MultiAgentState 字段没用 Annotated reducer，默认 LastValue OVERWRITE。
+    # 节点返回 dict 时各 channel 独立更新，本节点之前写入的字段（plan / query / history）
+    # 不会被 reducer 自动保留，必须显式透传关键字段才能让下游 aggregator + reviewer 拿到。
     return {
         "sub_results": ordered,
         "cached_pre_state": shared_pre_state,
+        # 透传上游字段，防止 OVERWRITE reducer 误删
+        "plan": plan,
+        "query": state.get("query"),
+        "history": state.get("history", []),
+        "review_loop_count": state.get("review_loop_count", 0),
     }
 
 
@@ -273,7 +281,12 @@ def build_supervisor_graph():
 
     # 注册节点
     g.add_node("planner", planner)
-    g.add_node("data_agent", RunnableLambda(_gather_sub_results))
+    # ⚠️ 2026-07-20 修复：不要包 RunnableLambda！(state, runtime) 签名的节点函数
+    # 必须直接 add_node(fn)，LangGraph 内置的 StateNode 会按 inspect.signature 自动注入
+    # state / config / runtime 任一参数。包 RunnableLambda 后，LangGraph 走标准的
+    # RunnableLambda 调用路径（func(input, **kwargs)），只认 config/run_manager，
+    # runtime 参数没被注入 → TypeError: missing 1 required positional argument: 'runtime'
+    g.add_node("data_agent", _gather_sub_results)
     g.add_node("aggregator", aggregator)
     g.add_node("reviewer", reviewer)
 
