@@ -345,7 +345,10 @@ class SQLSafetyValidator:
         if allowed_tables is not None:
             base_whitelist = [t.upper() for t in allowed_tables]
         elif cls._DYNAMIC_ALLOWED_TABLES:
-            base_whitelist = list(cls._DYNAMIC_ALLOWED_TABLES)
+            # 2026-07-20 修复大小写比对 bug：动态白名单在 set_dynamic_allowed_tables()
+            # 里被 .lower()，但 _extract_tables 返回的是 .upper()（SQL 已大写化），
+            # 不统一大小写会导致 DIM_REGION vs dim_region 被误判为非白名单。
+            base_whitelist = [t.upper() for t in cls._DYNAMIC_ALLOWED_TABLES]
         else:
             base_whitelist = [t.upper() for t in cls.ALLOWED_TABLES]
         effective_whitelist = base_whitelist
@@ -357,9 +360,11 @@ class SQLSafetyValidator:
             # set.difference 保留"引用了但不在白名单"的表名
             disallowed = sorted(referenced_tables - allowed_set)
             if disallowed:
+                # 2026-07-20：错误提示用 effective_whitelist 而不是硬编码的 ALLOWED_TABLES，
+                # 否则动态加载后用户看到的"只允许"列表和实际生效的不一致（误导排查）
                 raise ValueError(
                     f"SQL 安全拦截：检测到非白名单表 {disallowed}。"
-                    f"只允许查询 {cls.ALLOWED_TABLES}。"
+                    f"只允许查询 {sorted(effective_whitelist)}。"
                 )
 
         # ═══════════════════════════════════════════════════════════

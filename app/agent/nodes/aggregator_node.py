@@ -74,6 +74,16 @@ async def aggregator(state: DataAgentState, runtime: Runtime[DataAgentContext]) 
         plan = state.get("plan")
         sub_queries = plan.sub_queries if plan else []
 
+        # 2026-07-20 调试：确认 sub_results 实际长度（怀疑 retry 后被覆盖）
+        logger.info(
+            f"aggregator 入口: sub_results 长度={len(sub_results)}, "
+            f"plan.sub_queries 长度={len(sub_queries)}, "
+            f"review_loop_count={state.get('review_loop_count', 0)}, "
+            f"state keys={list(state.keys())}, "
+            f"plan type={type(plan).__name__}, "
+            f"plan is None={plan is None}"
+        )
+
         # ---------- 路径 1：单 sub_query（不调 LLM，省钱）----------
         if len(sub_results) == 1:
             only = sub_results[0]

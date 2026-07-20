@@ -39,6 +39,31 @@
 
 ---
 
+### 2026-07-20: 多分支白名单组装时大小写归一必须对所有分支一致
+
+**场景**: `app/core/sql_safety.py` 的 `validate()` 里组装 `base_whitelist` 有三个分支：
+```python
+if allowed_tables is not None:
+    base_whitelist = [t.upper() for t in allowed_tables]      # ✅ upper
+elif cls._DYNAMIC_ALLOWED_TABLES:
+    base_whitelist = list(cls._DYNAMIC_ALLOWED_TABLES)        # ❌ 忘了 upper
+else:
+    base_whitelist = [t.upper() for t in cls.ALLOWED_TABLES]  # ✅ upper
+```
+`_DYNAMIC_ALLOWED_TABLES` 在 `set_dynamic_allowed_tables()` 里被 `.lower()` 小写化存储；而比对对象 `_extract_tables()` 返回的表名是 `.upper()` 大写化（因为整段 SQL 先 `sql.upper()`）。两者比对时 `DIM_REGION` vs `dim_region` 全部不匹配，导致**所有动态加载的表名都被判为非白名单**——LLM 生成的 SQL 一执行就被拦。
+
+**触发条件**：必须实际跑一次 e2e 查询才会发现——单测里要么没走动态加载分支（直接传 `allowed_tables`），要么测试数据本身就小写，掩盖了大小写不一致。**41 个 sql_safety 单测全过，但实际运行仍炸**。
+
+**规则**:
+1. **多分支数据归一，所有分支必须用同一套规范**：只要任何一个分支做了 `upper/lower`，其他分支必须跟着做，否则分支间数据不一致。改完用 `grep` 把所有分支对一遍。
+2. **错误提示也要跟着数据源走**：拦截非白名单表时错误信息打了 `cls.ALLOWED_TABLES`（硬编码兜底），但实际生效的是 `effective_whitelist`（可能是动态加载的）。提示和实际不一致会误导排查——错误信息一律从实际生效的数据源取。
+3. **大小写敏感的比对必须 e2e 跑一次**：纯单测可能因为测试数据巧合（全小写/全大写）掩盖 bug。白名单这种功能至少要跑一次真实 LLM 生成的 SQL（大小写混合）确认能过。
+4. **MySQL 默认在 Linux 上表名大小写敏感、Windows 上不敏感**：LLM 生成 SQL 倾向用大写或混合大小写，而元数据存的是小写。比对前**一律归一到大写或小写**，不能假定来源一致。
+
+修法见 `git log` 2026-07-20 提交（elif 分支补 `.upper()`，错误提示改用 `effective_whitelist`）。
+
+---
+
 ## Working Prompts
 
 以下是藤子日常工作中使用的标准提示词模板，作为可复用的指令集。

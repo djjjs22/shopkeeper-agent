@@ -131,7 +131,7 @@ async def _run_preprocessing_once(query: str, base_state: dict, context, pre_sub
     return {k: final_state.get(k) for k in shared_keys if k in final_state}
 
 
-async def _gather_sub_results(state: MultiAgentState) -> dict[str, Any]:
+async def _gather_sub_results(state: MultiAgentState, runtime: Runtime[DataAgentContext]) -> dict[str, Any]:
     """Multi-Agent 数据执行节点：
     1. 跑 1 次共享前置 subgraph（节省 classify/rewrite/recall 重复时间）
     2. 对每个 sub_query 跑后置 subgraph（按 depends_on 分层并行）
@@ -146,6 +146,14 @@ async def _gather_sub_results(state: MultiAgentState) -> dict[str, Any]:
     并行策略（按 depends_on 分层）：
     - depends_on=[] → 同层 asyncio.gather 并行
     - depends_on=[1,2] → 等上层完成再跑
+
+    2026-07-20 修复：补 runtime 参数。
+    **LangGraph 1.x 的节点函数约定**：节点函数签名必须跟其他节点一致
+    （state, runtime）。如果只有 (state)，RunnableLambda 会被当成
+    "input transform 函数"，return 的 dict 会**替换**整个 input state，
+    导致后续节点（aggregator）拿不到 planner 写入的 plan 字段——
+    state 只剩 input state 的 query/history。
+    加 runtime 参数后，函数被识别为正常节点，return 的 dict 走 reducer 合并。
     """
     plan = state.get("plan")
     if not plan or not plan.sub_queries:
