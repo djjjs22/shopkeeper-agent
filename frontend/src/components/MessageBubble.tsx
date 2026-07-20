@@ -125,6 +125,23 @@ function MessageBubbleImpl({
             </div>
           )}
 
+          {/* 2026-07-20 (#6): warning 提示条（黄色），如意图解析失败 */}
+          {message.warnings?.map((w, i) => (
+            <div
+              key={i}
+              className="mt-3 border border-amber-400/40 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
+            >
+              ⚠️ {w}
+            </div>
+          ))}
+
+          {/* 2026-07-20 (#3): 结果截断提示 */}
+          {message.truncated && (
+            <div className="mt-3 border border-amber-400/40 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+              ⚠️ 结果集过大，仅展示前 5000 行。请加更精确的筛选条件或聚合维度。
+            </div>
+          )}
+
           {!isUser && <StepRail steps={message.steps} />}
           {!isUser && (message.result !== undefined
             ? <ResultTable data={message.result} query={query} />

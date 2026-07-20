@@ -35,7 +35,6 @@
 
 import yaml
 from langchain_core.prompts import PromptTemplate
-from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
@@ -44,6 +43,7 @@ from app.agent.state import DataAgentState, InheritedContext, TimeRangeState
 from app.core.log import logger
 from app.core.pydantic_parser import PydanticIntentParser
 from app.core.retry import retry_once
+from app.core.timing import timed_node
 
 # 2026-07-17 改造：SafeJsonOutputParser → PydanticIntentParser
 # 动机：SafeJsonOutputParser 只剥 think + json.loads，下游读取字段时无类型保护
@@ -182,6 +182,16 @@ async def generate_intent(state: DataAgentState, runtime: Runtime[DataAgentConte
             # 解析失败（含 retry 后仍失败）：降级空 dict，让下游 generate_sql 用 SELECT 1 兜底
             logger.error(f"{step}: 解析失败（已 retry 1 次），降级为空 intent: {e}")
             intent = {}
+            # 2026-07-20 (#6)：失败时显式推 warning 给前端，避免用户看到 SELECT 1 兜底
+            # 结果却误以为"查询完成"。前端把 warning 单独渲染（黄色提示条）。
+            writer({
+                "type": "warning",
+                "step": step,
+                "message": (
+                    "未能理解查询意图，将返回占位结果。请换一种更具体的问法，"
+                    "例如明确时间范围、字段名或筛选条件。"
+                ),
+            })
         else:
             # Pydantic 强校验通过：model_dump(by_alias=True) 还原 from 字段名
             intent = intent_obj.model_dump(by_alias=True, exclude_none=False)

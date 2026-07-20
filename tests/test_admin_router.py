@@ -20,14 +20,22 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _reset_node_profiles():
+def _reset_node_profiles(monkeypatch):
     """每个测试用例前后重置 node_profiles 映射，避免 POST 测试污染后续用例
 
     设计：autouse=True 自动应用，yield 后恢复。Tests can mutate freely.
+
+    2026-07-20 (#19)：同时禁用限流，admin 端点现在也限流 5/分，
+    连续测试用例会触发 429。monkeypatch _classify 让所有路径都返回 None。
     """
     from app.conf.app_config import app_config
+    from app.middleware.rate_limit import RateLimitMiddleware
 
     original = dict(app_config.node_profiles.mapping)
+    # 测试环境禁用限流（_classify 永远返回 None → dispatch 直接放行）
+    monkeypatch.setattr(
+        RateLimitMiddleware, "_classify", lambda self, path: None
+    )
     yield
     app_config.node_profiles.mapping = original
 

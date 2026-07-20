@@ -99,7 +99,8 @@ class ScriptedDWRepo:
         return None
 
     async def run(self, sql: str):
-        return [{"result": "ok"}]
+        # 2026-07-20：repository.run 改成返回 (rows, truncated) 元组（#3）
+        return [{"result": "ok"}], False
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -155,23 +156,43 @@ class EmptyEmbeddingClient:
 
 
 def _install_fake_llm(fake):
-    """把桩 LLM 注入到所有用到 llm 的节点模块，避免每个节点走真远端。
+    """把桩 LLM 注入到 LLMRegistry，所有节点走 get_llm(node_name) 都拿到这个 fake。
 
-    2026-07-14 改造：rebase 后链路多 4 个 LLM 节点（_recall_helpers × 3 + generate_intent），
-    不注入会让单测从 5s 涨到 90s（每个节点都连远端失败重试）。
+    2026-07-20 改造：节点全部已改用 `get_llm("node_name")` 按 node_profiles 路由，
+    旧版"给每个节点模块塞 m.llm = fake"的 patch 已是死代码（generate_intent
+    直接读 get_llm，_recall_helpers 也已迁移）。直接 patch registry.get_by_node
+    即可让所有节点拿到 fake，无需逐模块改。
+
+    注意：用 monkey-patch 替换实例方法后必须 restore，否则污染后续测试
+    （test_llm_registry.py 调 get_registry().get(...) 会拿到这个 fake）。
+    每次调用前先保存原方法，restore() 还原。
     """
+    global _orig_get_by_node, _orig_get
+    # 仅在第一次 install 时保存原方法（避免被多次 install 覆盖丢失原方法）
+    if _orig_get_by_node is None:
+        _orig_get_by_node = llm_mod._registry.get_by_node
+        _orig_get = llm_mod._registry.get
+
+    # 老兼容入口也顺手设一下（部分老脚本可能仍读 llm_mod.llm，零成本）
     llm_mod.llm = fake
-    import app.agent.nodes.classify_intent as m_ci
-    import app.agent.nodes.rewrite_query as m_rw
-    import app.agent.nodes.filter_table as m_ft
-    import app.agent.nodes.filter_metric as m_fm
-    import app.agent.nodes.generate_intent as m_gi  # 远程 d9af4603 引入
-    import app.agent.nodes.generate_sql as m_gs
-    import app.agent.nodes.correct_sql as m_cs
-    import app.agent.nodes.respond_chitchat as m_ch
-    import app.agent.nodes._recall_helpers as m_rh  # extend_keywords_with_llm
-    for m in (m_ci, m_rw, m_ft, m_fm, m_gi, m_gs, m_cs, m_ch, m_rh):
-        m.llm = fake
+    # 真正生效的入口：让 get_llm(node_name) 全部返回 fake
+    llm_mod._registry.get_by_node = lambda node_name: fake  # type: ignore[assignment]
+    llm_mod._registry.get = lambda profile: fake  # type: ignore[assignment]
+
+
+# 保存 LLMRegistry 的原始方法，测试结束后还原（防止污染其他测试模块）
+_orig_get_by_node = None
+_orig_get = None
+
+
+def _restore_fake_llm():
+    """还原 _install_fake_llm 的 patch（每个用例结束必须调用）"""
+    global _orig_get_by_node, _orig_get
+    if _orig_get_by_node is not None:
+        llm_mod._registry.get_by_node = _orig_get_by_node
+        llm_mod._registry.get = _orig_get
+        _orig_get_by_node = None
+        _orig_get = None
 
 
 def _initial_state(query: str) -> dict:
@@ -208,10 +229,14 @@ async def _run_one(query: str, replies: list[str], dw_repo):
     }
 
     final_state: dict = {}
-    async for item in graph.astream(input=state, context=context, stream_mode="updates"):
-        for _node, patch in item.items():
-            if patch:
-                final_state.update(patch)
+    try:
+        async for item in graph.astream(input=state, context=context, stream_mode="updates"):
+            for _node, patch in item.items():
+                if patch:
+                    final_state.update(patch)
+    finally:
+        # 关键：还原 registry 的 patch，防止污染其他测试模块（test_llm_registry 等）
+        _restore_fake_llm()
     return fake.call_count, dw_repo.validate_calls, final_state
 
 
@@ -224,30 +249,25 @@ async def _run_one(query: str, replies: list[str], dw_repo):
 async def test_empty_sql_is_intercepted():
     """空 SQL 防御：validate_sql 拦截 → correct_sql 修正两次 → 触发 MAX → run_sql 防御。
 
-    rebase 后链路多 4 个 LLM 节点（_extract_inherited_context + 3 个 extend_keywords + generate_intent），
-    replies 按 call_count 消耗。
-    """
-    # 完整 LLM 调用顺序（fixture 接管后）：
+    2026-07-20 改造后 LLM 调用顺序：
     # 0: classify_intent               → "data_query"
-    # 1: rewrite._extract_inherited    → 空 JSON
-    # 2: rewrite 主体                    → 原 query
-    # 3-5: extend_keywords × 3          → JSON 数组
-    # 6: filter_table                   → 降级空 dict
-    # 7: filter_metric                  → 降级空 list
-    # 8: generate_intent                → 坏 JSON（让 validate_sql 报错）
-    # 9: generate_sql（fallback 链）     → ""
-    # 10-11: correct_sql × 2            → ""
+    # 1-2: rewrite_query 主体 + extract_inherited_context 并行（asyncio.gather）
+    # 3: extract_keywords 内的统一关键词扩展（合并版，替代原 3 次 extend_keywords）
+    # 4: filter_table                   → 降级空 dict
+    # 5: filter_metric                  → 降级空 list
+    # 6: generate_intent                → 坏 JSON
+    # 7: correct_sql × 2                → ""
+    """
     replies = [
         "data_query",                                                # 0: classify
-        '{"entities": [], "conditions": [], "dimensions": []}',      # 1: extract_inherited
-        "统计华北地区的销售总额",                                    # 2: rewrite
-        '["a","b","c"]', '["x","y","z"]', '["1","2","3"]',          # 3-5: extend_keywords × 3
-        "{}",                                                          # 6: filter_table
-        "[]",                                                          # 7: filter_metric
-        '{"select": [{"expr": "BAD", "alias": "x"}], "from": "fact_order"}',  # 8: generate_intent (BAD)
-        "",                                                            # 9: generate_sql 空
-        "",                                                            # 10: correct_sql #1 空
-        "",                                                            # 11: correct_sql #2 空
+        "统计华北地区的销售总额",                                    # 1: rewrite 主体（与下一行并行）
+        '{"entities": [], "conditions": [], "dimensions": []}',      # 2: extract_inherited（并行）
+        '{"column":["销售额"], "value":["华北"], "metric":["GMV"]}',  # 3: extend_keywords 统一版
+        "{}",                                                          # 4: filter_table
+        "[]",                                                          # 5: filter_metric
+        '{"select": [{"expr": "BAD", "alias": "x"}], "from": "fact_order"}',  # 6: generate_intent (BAD)
+        "",                                                            # 7: correct_sql #1 空
+        "",                                                            # 8: correct_sql #2 空
     ]
     dw = ScriptedDWRepo("always_fail")
     calls, validates, final = await _run_one("统计华北地区的销售总额", replies, dw)
@@ -263,56 +283,47 @@ async def test_empty_sql_is_intercepted():
 async def test_correct_sql_closes_loop_then_passes():
     """坏 SQL 修正一轮后，validate_sql 闭环复验通过 → 跑通。
 
-    rebase 后链路多 4 个 LLM 节点：_extract_inherited_context + 3 个 extend_keywords_with_llm + generate_intent。
-    replies 按 call_count 消耗（先来先消耗），所以准备足够长的 replies 让关键节点拿到正确值。
+    2026-07-20 改造后 LLM 调用顺序（rewrite 并行 + extend 统一版）：
+    # 0: classify_intent
+    # 1-2: rewrite 主体 + extract_inherited 并行
+    # 3: extend_keywords 统一版（合并三维度）
+    # 4: filter_table
+    # 5: filter_metric
+    # 6: generate_intent
+    # 7: correct_sql #1
     """
-    # 完整 LLM 调用顺序（fixture 接管后）：
-    # 0: classify_intent               → "data_query"
-    # 1: rewrite._extract_inherited    → 空 JSON（无继承）
-    # 2: rewrite 主体                    → 原 query
-    # 3-5: extend_keywords × 3          → JSON 数组
-    # 6: filter_table                   → dict {table_name: [col_names]}
-    # 7: filter_metric                  → list [metric_names]
-    # 8: generate_intent                → 坏 SQL（让 validate_sql 报错）
-    # 9: correct_sql #1                 → 修复 SQL
     replies = [
         "data_query",                                                # 0: classify
-        '{"entities": [], "conditions": [], "dimensions": []}',      # 1: extract_inherited
-        "统计华北地区的销售总额",                                    # 2: rewrite
-        '["a","b","c"]', '["x","y","z"]', '["1","2","3"]',          # 3-5: extend_keywords × 3
-        '{"fact_order": ["order_id"]}',                              # 6: filter_table
-        '["GMV"]',                                                    # 7: filter_metric
-        '{"select": [{"expr": "SELECT bad_column", "alias": "x"}], "from": "dim_region"}',  # 8: generate_intent
-        "SELECT region_name FROM dim_region",                         # 9: correct_sql
+        "统计华北地区的销售总额",                                    # 1: rewrite 主体（并行）
+        '{"entities": [], "conditions": [], "dimensions": []}',      # 2: extract_inherited（并行）
+        '{"column":["销售额"], "value":["华北"], "metric":["GMV"]}',  # 3: extend_keywords 统一版
+        '{"fact_order": ["order_id"]}',                              # 4: filter_table
+        '["GMV"]',                                                    # 5: filter_metric
+        '{"select": [{"expr": "SELECT bad_column", "alias": "x"}], "from": "dim_region"}',  # 6: generate_intent
+        "SELECT region_name FROM dim_region",                         # 7: correct_sql
     ]
     dw = ScriptedDWRepo("fail_then_pass", fail_times=1)
     calls, validates, final = await _run_one("统计华北地区的销售总额", replies, dw)
 
     # 关键断言：correct_sql 修复后的 SQL 进了 run_sql
-    # （filter_table/filter_metric 失败时已降级保留全部候选，但 generate_intent 失败时走 SELECT 1 fallback，
-    #  这条 fallback SQL 会触发 validate_sql 报错，最后 correct_sql 给出"SELECT region_name..."，
-    #  validate_sql 第二次复验通过，进 run_sql）
-    # 关键是 correction_attempts <= MAX（不无限循环）
     assert (final.get("correction_attempts") or 0) <= 2
-    # error 应该被 clear（最终 SQL 通过 validate）
-    # 或 final['sql'] 是修复后的（如果脚本 reply 数刚好对齐）
 
 
 @pytest.mark.asyncio
 async def test_correction_overflow_stops_retrying():
     """超出 MAX_CORRECTION_ATTEMPTS 后强制走 run_sql 终止，不再多调一次 correct_sql。
 
-    rebase 后链路多 4 个 LLM 节点，replies 按 call_count 消耗。
+    2026-07-20 改造后 LLM 调用顺序（rewrite 并行 + extend 统一版）。
     """
     replies = [
         "data_query",                                                # 0: classify
-        '{"entities": [], "conditions": [], "dimensions": []}',      # 1: extract_inherited
-        "统计华北地区的销售总额",                                    # 2: rewrite
-        '["a","b","c"]', '["x","y","z"]', '["1","2","3"]',          # 3-5: extend_keywords × 3
-        "{}",                                                          # 6: filter_table
-        "[]",                                                          # 7: filter_metric
-        '{"select": [{"expr": "BAD", "alias": "x"}], "from": "fact_order"}',  # 8: generate_intent
-        "BAD1", "BAD2", "BAD3",                                       # 9-11: generate_sql + 2 次 correct_sql
+        "统计华北地区的销售总额",                                    # 1: rewrite 主体（并行）
+        '{"entities": [], "conditions": [], "dimensions": []}',      # 2: extract_inherited（并行）
+        '{"column":["销售额"], "value":["华北"], "metric":["GMV"]}',  # 3: extend_keywords 统一版
+        "{}",                                                          # 4: filter_table
+        "[]",                                                          # 5: filter_metric
+        '{"select": [{"expr": "BAD", "alias": "x"}], "from": "fact_order"}',  # 6: generate_intent
+        "BAD1", "BAD2",                                                # 7-8: correct_sql × 2
     ]
     dw = ScriptedDWRepo("always_fail")
     calls, validates, final = await _run_one("统计华北地区的销售总额", replies, dw)

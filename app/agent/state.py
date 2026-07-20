@@ -93,7 +93,7 @@ class DBInfoState(TypedDict):
 
 
 class DataAgentState(TypedDict):
-    """一次问数链路中的核心状态
+    """一次问数链路中的核心状态（single-agent 13 节点链路使用）
 
     意图分类和查询改写（刀1）在链路最前面执行：
       query   — 用户当前问题，**始终是原始输入**，不被改写节点覆盖
@@ -114,6 +114,9 @@ class DataAgentState(TypedDict):
 
     # ── 召回阶段 ──
     keywords: list[str]  # 抽取的关键词
+    # 2026-07-20 新增：合并版 LLM 关键词扩展（一次调用产出三维度）
+    # 三路 recall 节点直接读这里，不再各自调 LLM（节省 2 次调用 / 成本 -25%）
+    extended_keywords_by_dim: dict[str, list[str]]  # {"column":[...], "value":[...], "metric":[...]}
     retrieved_column_infos: list[ColumnInfo]  # 检索到的字段信息
     retrieved_metric_infos: list[MetricInfo]  # 检索到的指标信息
     retrieved_value_infos: list[ValueInfo]  # 检索到的取值信息
@@ -128,12 +131,24 @@ class DataAgentState(TypedDict):
 
     error: str  # 校验SQL时出现的错误信息
 
-    # ── 2026-07-17 改造：Multi-Agent 改造（planner/aggregator/reviewer 用）──
-    # 这些字段在现有 single-agent 链路里都是 None，不影响老代码
+
+class MultiAgentState(DataAgentState):
+    """Multi-Agent 链路专属状态（2026-07-20 #10 拆分）
+
+    2026-07-17 改造前这些字段塞在 DataAgentState 里，single-agent 13 节点链路
+    永远是 None，但所有节点函数签名都 import 同一 state 类型，认知负担大。
+    现在拆出来，supervisor_graph 用 MultiAgentState，graph / data_subgraph
+    沿用 DataAgentState（更干净，新人读 graph.py 时不再被一堆 None 字段困惑）。
+
+    cached_pre_state 留在本 schema（不迁 context）：LangGraph 的 runtime.context
+    是只读的，节点运行时不能修改；cached_pre_state 要在 reviewer retry 时更新，
+    必须放 state 里。它属于 multi-agent 专属，放这里不影响 single-agent。
+    """
+
     plan: Optional[QueryPlan]  # Planner 输出的执行计划
     sub_results: list  # 每个 sub_query 跑完的结果 [{sub_id, query, sql, rows, error}, ...]
     final_response: dict  # Aggregator 合并后的最终回复 {answer, sub_results, is_synthesized}
     confidence: float  # Reviewer 打分 0-1
     review_action: Optional[str]  # "retry" / None；空表示通过
     review_loop_count: int  # 反思轮数（max_loop=2 保护）
-    cached_pre_state: Optional[dict]  # 共享前置 subgraph 的结果缓存（reviewer retry 复用，避免重跑 16s）
+    cached_pre_state: Optional[dict]  # 共享前置 subgraph 的结果缓存（reviewer retry 复用）

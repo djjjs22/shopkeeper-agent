@@ -119,6 +119,29 @@ async def lifespan(app: FastAPI):
     # Redis 探活协程是异步启动，跟同步 init 分开调用
     await _safe_async_init("Redis探活协程", redis_client_manager.start)
 
+    # 2026-07-20 (#9)：从 meta_db 加载表名 → 注入 SQL 安全校验器
+    # 让加表流程零代码改动：在 meta_config.yaml 加表 + 跑 build_meta_knowledge 后，
+    # 下次启动自动识别新表，无需改 ALLOWED_TABLES 常量。
+    try:
+        from app.core.sql_safety import SQLSafetyValidator
+        from app.repositories.mysql.meta.meta_mysql_repository import (
+            MetaMySQLRepository,
+        )
+
+        async with meta_mysql_client_manager.session_factory() as session:
+            meta_repo = MetaMySQLRepository(session)
+            tables = await meta_repo.get_all_table_infos()
+            names = [getattr(t, "name", "") for t in tables]
+            SQLSafetyValidator.set_dynamic_allowed_tables(names)
+            _log.info(
+                "[OK] 动态表名白名单已加载: %s",
+                SQLSafetyValidator.get_effective_allowed_tables(),
+            )
+    except Exception as e:
+        _log.warning(
+            "[SKIP] 动态表名白名单加载失败，退回硬编码 ALLOWED_TABLES: %s", e
+        )
+
     # 启动应用内定时任务调度器（每天 02:00 跑归档）
     try:
         start_scheduler()
@@ -143,6 +166,7 @@ async def lifespan(app: FastAPI):
     # 2. 再关各 manager（Redis.close 会 cancel 探活协程 + close 连接）
     await _safe_close("Qdrant", qdrant_client_manager.close)
     await _safe_close("ES", es_client_manager.close)
+    await _safe_close("Embedding", embedding_client_manager.close)
     await _safe_close("MetaMySQL", meta_mysql_client_manager.close)
     await _safe_close("DWMySQL", dw_mysql_client_manager.close)
     await _safe_close("Redis", redis_client_manager.close)

@@ -40,8 +40,15 @@ class MySQLClientManager:
     def init(self):
         """初始化 Engine 和 Session 工厂"""
         # 创建异步 Engine，相当于先把“数据库连接能力”准备好
+        # 2026-07-20 优化：增加 max_overflow（突发并发）+ pool_timeout（fail fast）
+        # 原 pool_size=10 无 overflow，11 并发请求会卡 pool checkout 30s，
+        # 改后允许瞬时到 30 个连接，10s 拿不到连接快速暴露失败
         self.engine = create_async_engine(
-            self._get_url(), pool_size=10, pool_pre_ping=True
+            self._get_url(),
+            pool_size=10,
+            max_overflow=20,
+            pool_timeout=10,
+            pool_pre_ping=True,
         )
         # 基于 Engine 创建 Session 工厂，后面真正查库时再拿 session
         self.session_factory = async_sessionmaker(

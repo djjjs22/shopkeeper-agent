@@ -19,8 +19,6 @@ Python 知识点：
 
 import re  # import = 导入。re 是 Python 的"正则表达式"模块
 
-# 正则表达式：一种文本模式匹配语言，用来查找、替换符合特定模式的字符串
-from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 # from ... import ... = 从某个模块导入特定的东西
@@ -40,6 +38,9 @@ from app.core.log import logger
 # logger.warning() = 记录警告信息
 # logger.error() = 记录错误信息
 from app.core.sql_safety import SQLSafetyValidator
+
+# 正则表达式：一种文本模式匹配语言，用来查找、替换符合特定模式的字符串
+from app.core.timing import timed_node
 
 # SQLSafetyValidator = 我们刚写的 SQL 安全校验器
 # 包含三层安全检查：关键字拦截 + SELECT白名单 + SQL注入检测
@@ -107,6 +108,52 @@ def _clean_sql(sql: str) -> str:
     # 第三步：去掉首尾空白（空格、换行、制表符）
     # .strip() = 字符串方法，删除开头和结尾的所有空白字符
     return sql.strip()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 错误信息脱敏（2026-07-20 #1 安全加固）
+# ─────────────────────────────────────────────────────────────────────
+# 原 run_sql 直接 `writer({"type": "error", "message": str(e)})` 会把 MySQL /
+# SQLAlchemy 异常原文（含表名、列名、SQL 片段、连接信息）泄露给前端。
+# 改成分类映射，给前端友好文案，完整异常服务端 logger 已记。
+
+# 后端错误特征 → 友好文案 的映射表
+# 顺序敏感：更具体的特征放在前面
+_BACKEND_ERROR_MAP: list[tuple[str, str]] = [
+    # 表不存在
+    ("table", "查询的表不存在，请确认表名或换一种问法"),
+    ("unknown column", "查询的字段名有误，请换一种问法描述"),
+    ("doesn't exist", "查询的对象不存在，请换一种问法"),
+    # 语法
+    ("syntax", "SQL 语法错误，已记录，请重试或换一种问法"),
+    ("you have an error in your sql syntax", "SQL 语法错误，已记录，请重试"),
+    # 字段引用歧义
+    ("ambiguous", "查询字段有歧义，请更精确地描述"),
+    # 连接 / 超时
+    ("connection", "数据库连接异常，请稍后重试"),
+    ("timeout", "查询超时，请缩小查询范围或换更精确的条件"),
+    # 权限
+    ("access denied", "无权限执行此查询"),
+    # 内存
+    ("out of memory", "查询结果过大，请加更精确的筛选条件"),
+]
+
+
+def _safe_error_message(exc: Exception) -> str:
+    """把数据库异常分类成对前端安全的简短文案
+
+    Args:
+        exc: 数据库执行抛出的异常
+
+    Returns:
+        前端可展示的中文文案（不包含 SQL / 表名 / 列名等敏感信息）
+    """
+    msg = str(exc).lower()
+    for pattern, friendly in _BACKEND_ERROR_MAP:
+        if pattern in msg:
+            return friendly
+    # 兜底：完全不匹配任何已知特征时，不透传原文，给通用文案
+    return "查询执行失败，已记录日志，请换一种问法或缩小查询范围"
 
 
 @timed_node
@@ -244,47 +291,48 @@ async def run_sql(
         dw_mysql_repository = runtime.context["dw_mysql_repository"]
 
         # await = 等待异步操作完成
-        # dw_mysql_repository.run(sql) = 执行 SQL 并返回结果列表
-        # run() 方法内部使用 SQLAlchemy 的 text() 执行原生 SQL
-        # 返回值是 list[dict] 格式，例如：
-        #   [{"地区": "华东", "销售额": 100000}, {"地区": "华南", "销售额": 80000}]
-        result = await dw_mysql_repository.run(sql)
-        #                                         ↑ await = 等待异步操作完成
-        #                                         ↑ .run(sql) = 执行 SQL，返回 list[dict]
+        # dw_mysql_repository.run(sql) = 执行 SQL 并返回 (rows, truncated) 元组
+        # 2026-07-20 改造（#3 LIMIT 兜底）：run() 现在返回 (list[dict], bool)
+        #   rows = 最多 _MAX_RESULT_ROWS 行的查询结果
+        #   truncated = True 表示结果集超过上限被截断（前端需提示用户加条件）
+        result, truncated = await dw_mysql_repository.run(sql)
 
         # ═══════════════════════════════════════════════════
         # Step 5：向前端返回结果
         # ═══════════════════════════════════════════════════
-        # len(result) = 内置函数，返回列表/字符串/字典的元素个数
-        # 这里 result 是一个列表，len(result) 返回查询结果的行数
+        # 2026-07-20 (#8)：原代码有重复的 Step 5 块（粘贴残留），合并成一个。
         logger.info(f"[SQL安全] SQL 执行成功，返回 {len(result)} 行数据")
 
-        # ⭐ 结果非空校验（藤子手写 v1）           ← 你写的
-        # 防止 LLM 语义幻觉：SQL语法正确但WHERE条件偏差 → 空结果
-        # 用户看到空结果可能误以为"没数据"，实际可能是条件写错了
-        if len(result) == 0:  # 判断结果列表是否为空
-            query = state["query"]  # 从状态中取出用户的原始问题
-            warning_msg = f"查询'{query}'返回0行数据，可能是查询条件过于严格或者筛选条件有误"
-            #              ↑ f-string：{query} 被替换成实际的用户问题
+        # ⭐ 空结果校验（防 LLM 语义幻觉：SQL 语法对但 WHERE 条件偏差 → 空结果）
+        if len(result) == 0:
+            query = state["query"]
+            warning_msg = (
+                f"查询'{query}'返回0行数据，"
+                f"可能是查询条件过于严格或者筛选条件有误"
+            )
             writer({"type": "warning", "message": warning_msg})
-            #       ↑ type="warning" → 前端识别为警告事件，渲染黄色条
-            #       ↑ message=warning_msg → 警告的具体文字内容
             logger.warning(f"[结果校验] 空结果警告: {warning_msg}")
-            # ↑ 记录日志，方便排查用户反馈"为什么查不出来"
-        # ═══════════════════════════════════════════════════
-        # Step 5：向前端返回结果
-        # ═══════════════════════════════════════════════════
-        # len(result) = 内置函数，返回列表/字符串/字典的元素个数
-        # 这里 result 是一个列表，len(result) 返回查询结果的行数
-        logger.info(f"[SQL安全] SQL 执行成功，返回 {len(result)} 行数据")
 
         # 通知前端：执行成功
-        writer({"type": "progress", "step": step, "status": "success"})  # 前端显示：执行SQL ✅
+        writer({"type": "progress", "step": step, "status": "success"})
 
         # 把查询结果推送给前端
         # type="result" → 表示这是最终结果
         # data=result → 实际的数据内容
-        writer({"type": "result", "data": result})
+        # truncated=True → 结果超过 _MAX_RESULT_ROWS 被截断（2026-07-20 #3）
+        result_event: dict = {"type": "result", "data": result}
+        if truncated:
+            result_event["truncated"] = True
+            result_event["max_rows"] = 5000
+            # 同时发一条 warning 让前端 UI 明显提示
+            writer({
+                "type": "warning",
+                "message": "结果集过大，仅展示前 5000 行。请加更精确的筛选条件或聚合维度。",
+            })
+            logger.warning(
+                f"[SQL安全] 结果截断：返回 {len(result)} 行（实际更多）"
+            )
+        writer(result_event)
 
     except Exception as e:
         # 外层 except：捕获数据库执行层面的错误
@@ -294,14 +342,16 @@ async def run_sql(
         #   - 字段错误：Unknown column 'xxx' in 'field list'
         #   - JOIN 问题：Column 'xxx' in on clause is ambiguous
 
-        # 记录错误日志
+        # 记录错误日志（完整错误留服务端，含 SQL 上下文便于排查）
         logger.error(f"[SQL安全] 执行失败: {e}")
 
         # 通知前端：执行失败
         writer({"type": "progress", "step": step, "status": "error"})
 
-        # 把错误详情推送给前端
-        writer({"type": "error", "message": str(e)})
+        # 2026-07-20 改造（#1 错误脱敏）：不再把数据库原始异常 str(e) 直接推给前端
+        # 原做法会泄露表名、列名、SQL 片段、连接信息。改成分类后的友好文案。
+        safe_msg = _safe_error_message(e)
+        writer({"type": "error", "message": safe_msg})
 
         # raise 重新抛出异常，让 LangGraph 框架和上层调用者也能感知到这个错误
         # 重新抛出的作用：保持错误传播链不断

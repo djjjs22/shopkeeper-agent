@@ -184,7 +184,8 @@ class FakeDWRepo:
         return None
 
     async def run(self, sql: str):
-        return [{"销售总额": 1234567}]
+        # 2026-07-20：repository.run 改成返回 (rows, truncated) 元组（#3）
+        return [{"销售总额": 1234567}], False
 
 
 # ───────────────────────────────────────────────────────────────
@@ -323,11 +324,30 @@ _NODE_MODULES = [
 
 
 def _install_fake_llm(fake):
-    """节点里是 `from app.agent.llm import llm` 的模块级绑定，
-    必须把 fake 同时打到 llm 模块和各 node 模块的命名空间。"""
-    llm_mod.llm = fake
-    for mod in _NODE_MODULES:
-        mod.llm = fake
+    """2026-07-20 改造：和 test_sql_stability_smoke 同款，patch registry 的
+    get_by_node / get，让所有走 get_llm(node_name) 的节点都拿到 fake。
+    老的 `m.llm = fake` 已是死代码（generate_intent / _recall_helpers 已迁移）。"""
+    global _orig_get_by_node, _orig_get
+    if _orig_get_by_node is None:
+        _orig_get_by_node = llm_mod._registry.get_by_node
+        _orig_get = llm_mod._registry.get
+    llm_mod.llm = fake  # 老兼容入口
+    llm_mod._registry.get_by_node = lambda node_name: fake
+    llm_mod._registry.get = lambda profile: fake
+
+
+def _restore_fake_llm():
+    """还原 patch，防污染其他测试"""
+    global _orig_get_by_node, _orig_get
+    if _orig_get_by_node is not None:
+        llm_mod._registry.get_by_node = _orig_get_by_node
+        llm_mod._registry.get = _orig_get
+        _orig_get_by_node = None
+        _orig_get = None
+
+
+_orig_get_by_node = None
+_orig_get = None
 
 
 def _build_context():
@@ -367,24 +387,27 @@ async def _run_chain(query: str):
     final_state: dict = {}
     result_events: list = []
 
-    async for item in graph.astream(
-        input=_initial_state(query),
-        context=_build_context(),
-        stream_mode=["updates", "custom"],
-    ):
-        # 多 stream_mode 下每个 chunk 是 (mode, data) 元组
-        if isinstance(item, tuple) and len(item) == 2:
-            mode, chunk = item
-        else:
-            mode, chunk = None, item
+    try:
+        async for item in graph.astream(
+            input=_initial_state(query),
+            context=_build_context(),
+            stream_mode=["updates", "custom"],
+        ):
+            # 多 stream_mode 下每个 chunk 是 (mode, data) 元组
+            if isinstance(item, tuple) and len(item) == 2:
+                mode, chunk = item
+            else:
+                mode, chunk = None, item
 
-        if mode == "updates":
-            for _node, patch in chunk.items():
-                if patch:
-                    final_state.update(patch)
-        elif mode == "custom":
-            if isinstance(chunk, dict) and chunk.get("type") == "result":
-                result_events.append(chunk)
+            if mode == "updates":
+                for _node, patch in chunk.items():
+                    if patch:
+                        final_state.update(patch)
+            elif mode == "custom":
+                if isinstance(chunk, dict) and chunk.get("type") == "result":
+                    result_events.append(chunk)
+    finally:
+        _restore_fake_llm()
 
     return final_state, result_events
 

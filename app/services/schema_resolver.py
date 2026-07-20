@@ -39,11 +39,10 @@ cols = await resolver.list_columns("fact_order")
 
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import Any, Optional
 
+from app.core.ttl_cache import TTLCache
 from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
-
 
 # ─────────────────────────────────────────────────────────────────────
 # 依赖注入容器
@@ -66,7 +65,11 @@ class SchemaResolver:
 # 单点 API：拿到某张表的字段
 # ─────────────────────────────────────────────────────────────────────
 
-_TABLE_COLUMNS_CACHE: dict[str, list[dict[str, Any]]] = {}
+# 2026-07-20：TTLCache 替代普通 dict，防止元数据更新后不刷新 + 防泄漏。
+# 表数量有限（5 张），maxsize=64 富余；TTL=1h。
+_TABLE_COLUMNS_CACHE: TTLCache[str, list[dict[str, Any]]] = TTLCache(
+    maxsize=64, ttl=3600.0
+)
 
 
 async def list_table_columns(
@@ -97,8 +100,11 @@ async def list_table_columns(
         - examples 是 JSON 字符串 → 转 list（防御）
     """
     # 1. 缓存优先：避免重复查询
-    if use_cache and table_name in _TABLE_COLUMNS_CACHE:
-        return _TABLE_COLUMNS_CACHE[table_name]
+    if use_cache:
+        _MISSING = object()
+        cached = _TABLE_COLUMNS_CACHE.get(table_name, _MISSING)
+        if cached is not _MISSING:
+            return cached
 
     # 2. 没有 repository：返回空 list（容错）
     if resolver is None or resolver.meta_mysql_repository is None:
@@ -133,7 +139,7 @@ async def list_table_columns(
 
     # 5. 写缓存
     if use_cache:
-        _TABLE_COLUMNS_CACHE[table_name] = result
+        _TABLE_COLUMNS_CACHE.set(table_name, result)
 
     return result
 

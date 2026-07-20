@@ -23,9 +23,9 @@ from fastapi import APIRouter, Header, HTTPException, status
 
 from app.agent.llm import get_registry
 from app.api.schemas.admin_schema import (
+    LLMStatusResponse,
     LLMSwitchRequest,
     LLMSwitchResponse,
-    LLMStatusResponse,
 )
 from app.conf.app_config import app_config
 from app.core.log import logger
@@ -166,6 +166,48 @@ async def switch_llm_profile(
         old_profile=old_profile,
         new_profile=body.profile,
     )
+
+
+# ============================================================================
+# 2026-07-20 (#22)：LLM 指标查询端点
+# ============================================================================
+
+
+@admin_router.get(
+    "/api/admin/metrics",
+    tags=["admin"],
+    summary="查询 LLM 调用指标（按 profile 聚合：调用数/token/错误率/平均耗时）",
+)
+async def get_llm_metrics(
+    x_admin_token: Annotated[str | None, Header()] = None,
+):
+    """返回进程启动以来的 LLM 调用聚合指标
+
+    示例：
+        curl -H "X-Admin-Token: xxx" http://localhost:8000/api/admin/metrics
+    """
+    _check_admin_token(x_admin_token)
+    from app.agent.llm_metrics import get_metrics_collector
+
+    return {
+        "profiles": get_metrics_collector().snapshot(),
+    }
+
+
+@admin_router.post(
+    "/api/admin/metrics/reset",
+    tags=["admin"],
+    summary="清零 LLM 调用指标（调试 / 重新统计时用）",
+)
+async def reset_llm_metrics(
+    x_admin_token: Annotated[str | None, Header()] = None,
+):
+    """清零所有 profile 的累计指标"""
+    _check_admin_token(x_admin_token)
+    from app.agent.llm_metrics import get_metrics_collector
+
+    get_metrics_collector().reset()
+    return {"status": "ok", "message": "metrics cleared"}
 
 
 def _mask_key(key: str) -> str:

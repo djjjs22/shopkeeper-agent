@@ -57,6 +57,14 @@ class SQLSafetyValidator:
         "RENAME",     # 重命名（例如：RENAME TABLE old TO new）
         "LOAD",       # 加载数据文件（例如：LOAD DATA INFILE）
         "IMPORT",     # 导入数据
+        # 2026-07-20 新增（#2 安全加固）：
+        "CALL",       # 调用存储过程（可能执行任意 SQL）
+        "HANDLER",    # MySQL 直读表数据接口（绕过权限检查）
+        "DO",         # 执行表达式（DO SLEEP(30) 等）
+        "SET",        # 修改 session 变量（SET sql_mode=...）
+        "OUTFILE",    # SELECT ... INTO OUTFILE 写文件
+        "DUMPFILE",   # SELECT ... INTO DUMPFILE 写文件
+        "LOAD_FILE",  # 读服务器文件
     ]
 
     # ═══════════════════════════════════════════════════════════════
@@ -70,6 +78,29 @@ class SQLSafetyValidator:
         "dim_date",      # 时间维度表（年、季度、月、日）
         "fact_order",    # 订单事实表（核心数据表）
     ]
+
+    # 2026-07-20 (#9)：启动时从 meta_db 动态加载的表名白名单
+    # 为空时退回类变量 ALLOWED_TABLES（兜底）。
+    # 通过 set_dynamic_allowed_tables() 在 lifespan 启动钩子里设置。
+    _DYNAMIC_ALLOWED_TABLES: set[str] = set()
+
+    @classmethod
+    def set_dynamic_allowed_tables(cls, table_names: list[str]) -> None:
+        """启动时从 meta_db 加载表名 → 注入到 SQL 校验器
+
+        让"加表"流程零代码改动：在 meta_config.yaml 加表 + 跑 build_meta_knowledge，
+        下次启动后 SQL 校验器自动识别新表，不用改 ALLOWED_TABLES 常量。
+        """
+        cls._DYNAMIC_ALLOWED_TABLES = {
+            t.lower() for t in table_names if t and isinstance(t, str)
+        }
+
+    @classmethod
+    def get_effective_allowed_tables(cls) -> list[str]:
+        """返回当前生效的表名白名单（动态优先，否则兜底）"""
+        if cls._DYNAMIC_ALLOWED_TABLES:
+            return sorted(cls._DYNAMIC_ALLOWED_TABLES)
+        return list(cls.ALLOWED_TABLES)
 
     # ═══════════════════════════════════════════════════════════════
     # 第三层防护：SQL 注入特征检测
@@ -99,6 +130,8 @@ class SQLSafetyValidator:
 
         # UNION SELECT 注入：通过 UNION 合并其他查询结果
         # 匹配示例: '' UNION SELECT username, password FROM users --
+        # 注意：原 `r"UNION\s+SELECT"` 可被 `UNION/**/SELECT` 绕过，
+        # 现在先在 _strip_block_comments 里剥掉块注释，再用这个正则即可覆盖
         r"UNION\s+SELECT",
 
         # 多语句注入（使用分号堆叠多条 SQL）
@@ -113,8 +146,67 @@ class SQLSafetyValidator:
 
         # 块注释绕过：用 /* ... */ 包裹关键词来绕过检测
         # 匹配示例: DROP/**/TABLE users
+        # 注意：这条要在剥块注释之前匹配（验证 SQL 里是否原本就带块注释，
+        # 因为正常 SELECT 不会用块注释，出现就高度可疑）
         r"/\*.*\*/",
+
+        # 2026-07-20 新增（#2 安全加固）：
+
+        # 时间盲注：SLEEP() / BENCHMARK() 让数据库卡住测试是否注入成功
+        # 匹配示例: SELECT IF(1=1, SLEEP(30), 0)
+        r"\bSLEEP\s*\(",
+        r"\bBENCHMARK\s*\(",
+
+        # 系统表/系统 schema 访问：泄露数据库元信息（列名、用户、权限）
+        # 匹配示例: SELECT * FROM information_schema.tables
+        #         SELECT * FROM mysql.user
+        #         SELECT * FROM performance_schema.threads
+        #         SELECT * FROM sys.schema_table_statistics
+        r"\binformation_schema\b",
+        r"\bmysql\s*\.",
+        r"\bperformance_schema\b",
+        r"\bsys\s*\.",
+
+        # 文件读写（虽然 OUTFILE/DUMPFILE/LOAD_FILE 已在 FORBIDDEN_KEYWORDS，
+        # 但 LLM 可能写成 INTO OUTFILE 形式，独立正则兜底）
+        r"\bINTO\s+(OUTFILE|DUMPFILE)\b",
+        r"\bLOAD_FILE\s*\(",
+
+        # 不在白名单的系统函数（信息泄露/资源消耗）
+        r"\bLOAD_FILE\s*\(",
     ]
+
+    # ═══════════════════════════════════════════════════════════════
+    # 第二层半防护：表名引用提取正则
+    # ═══════════════════════════════════════════════════════════════
+    # 用来从 FROM / JOIN 后面提取表名，配合 ALLOWED_TABLES 做白名单校验
+    #
+    # 支持的形态：
+    #   FROM dim_region               → name="dim_region"
+    #   JOIN fact_order               → name="fact_order"
+    #   FROM dw.dim_region            → name="dw", name2="dim_region"（取 name2）
+    #   FROM `dim_region`             → name="dim_region"（反引号被忽略）
+    #   FROM dim_region dr            → name="dim_region"（别名 dr 不被提取）
+    #
+    # 不支持：FROM a, b, c（逗号分隔多表）——当前 SQL 模板不生成这种形态
+    TABLE_REFERENCE_PATTERN: str = (
+        r"(?:\bFROM|\bJOIN)\s+`?(?P<name>[a-zA-Z_]\w*)`?"
+        r"(?:\s*\.\s*`?(?P<name2>[a-zA-Z_]\w*)`?)?"
+    )
+
+    # CTE 定义抽取：WITH temp AS (...) 或 WITH a AS (...), b AS (...)
+    # 只捕获 CTE 名（temp / a / b），不捕获 AS 后面的内容。
+    # 用在表名白名单校验时把 CTE 名动态并入白名单（CTE 是 SQL 自己定义的临时表）
+    #
+    # 形态覆盖：
+    #   WITH temp AS (...)                → 命中 temp（开头 WITH 触发）
+    #   WITH a AS (...), b AS (...)       → 命中 a + b（开头 WITH + 逗号后续）
+    #
+    # 关键约束：要求 name 后紧跟 `AS (`（左括号必须紧跟），避免误匹配
+    # SELECT 子句里的 `col AS alias`（alias 后面不会是左括号）
+    CTE_NAME_PATTERN: str = (
+        r"(?:\bWITH\s+|,\s*)`?(?P<cte>[a-zA-Z_]\w*)`?\s+AS\s*\("
+    )
 
     # ═══════════════════════════════════════════════════════════════
     # validate() 方法：核心校验入口
@@ -172,11 +264,20 @@ class SQLSafetyValidator:
         # r"'[^']*'" = 匹配一对单引号及其内容
         sql_no_strings = re.sub(r"'[^']*'", "", sql_upper)
 
+        # 2026-07-20 新增（#2 安全加固）：剥块注释后再做关键字/注入匹配
+        # 防止 `UNION/**/SELECT`、`DROP/**/TABLE` 这种用注释分割绕过检测。
+        # 用空格替换（不是空串），保留关键字边界。
+        # 注意：剥注释后 sql_no_strings 里就不再有块注释，所以 INJECTION_PATTERNS 里
+        # 的 r"/\*.*\*/" 不会再匹配（这正好对——剥掉之后还匹配说明 SQL 本来就没块注释，
+        # 是正常情况；INJECTION_PATTERNS 那条规则用于"在剥之前"已经拦住可疑 SQL，
+        # 现在策略改成"剥之后用更严的关键字/注入规则"，更彻底）。
+        sql_no_comments = re.sub(r"/\*.*?\*/", " ", sql_no_strings, flags=re.DOTALL)
+
         # 第一层：危险关键字拦截（在去掉字符串后的 SQL 中匹配）
         for keyword in cls.FORBIDDEN_KEYWORDS:
             pattern = r"\b" + keyword + r"\b"
-            # 用 sql_no_strings 而不是 sql_upper，避免引号内的关键字被误杀
-            if re.search(pattern, sql_no_strings):
+            # 用 sql_no_comments 而不是 sql_upper，避免引号内/注释里的关键字被误杀
+            if re.search(pattern, sql_no_comments):
                 # 找到了危险关键字 → 拦截！
                 # .index(keyword)：字符串方法，找到 keyword 在 sql_upper 中的位置（索引）
                 #   Python 的索引起始是 0
@@ -215,7 +316,7 @@ class SQLSafetyValidator:
             )
 
         # ═══════════════════════════════════════════════════════════
-        # 第三层：SQL 注入特征检测
+        # 第三层：SQL 注入特征检测（优先于表名白名单：注入是攻击特征，必须先拦）
         # ═══════════════════════════════════════════════════════════
         for pattern in cls.INJECTION_PATTERNS:
             # re.search(pattern, sql, re.IGNORECASE)
@@ -228,8 +329,96 @@ class SQLSafetyValidator:
                 )
 
         # ═══════════════════════════════════════════════════════════
+        # 第三层半：表名白名单校验（2026-07-20 修复：之前形同虚设）
+        # ═══════════════════════════════════════════════════════════
+        # 从 FROM / JOIN 后提取表名（已移除字符串字面量，防止 'FROM' 之类字面量误命中），
+        # 大小写不敏感比对白名单；任何一个不在白名单即拦截。
+        #
+        # CTE 名（WITH temp AS (...)）作为临时表被 FROM 引用是合法的，
+        # 抽取后动态并入白名单，避免误杀。
+        #
+        # 优先级（2026-07-20 #9 动态加载）：
+        #   1. 调用方显式传 allowed_tables
+        #   2. 启动时从 meta_db 加载的 _DYNAMIC_ALLOWED_TABLES（如有）
+        #   3. 类变量 ALLOWED_TABLES 硬编码兜底
+        # 传空列表 [] 则跳过校验（用于单元测试或非生产环境临时关闭白名单）。
+        if allowed_tables is not None:
+            base_whitelist = [t.upper() for t in allowed_tables]
+        elif cls._DYNAMIC_ALLOWED_TABLES:
+            base_whitelist = list(cls._DYNAMIC_ALLOWED_TABLES)
+        else:
+            base_whitelist = [t.upper() for t in cls.ALLOWED_TABLES]
+        effective_whitelist = base_whitelist
+        if effective_whitelist:
+            cte_names = cls._extract_cte_names(sql_no_comments)
+            referenced_tables = cls._extract_tables(sql_no_comments)
+            # CTE 名视作"当前 SQL 内合法引用"，并入白名单
+            allowed_set = set(effective_whitelist) | cte_names
+            # set.difference 保留"引用了但不在白名单"的表名
+            disallowed = sorted(referenced_tables - allowed_set)
+            if disallowed:
+                raise ValueError(
+                    f"SQL 安全拦截：检测到非白名单表 {disallowed}。"
+                    f"只允许查询 {cls.ALLOWED_TABLES}。"
+                )
+
+        # ═══════════════════════════════════════════════════════════
         # 全部校验通过 → 返回干净的 SQL
         # ═══════════════════════════════════════════════════════════
         # return：函数返回语句，把结果传给调用者
         # sql.strip()：再次去除首尾空白，确保返回的是干净的 SQL
         return sql.strip()
+
+    @classmethod
+    def _extract_tables(cls, sql_no_strings_upper: str) -> set[str]:
+        """从 SQL 的 FROM / JOIN 子句中提取被引用的表名
+
+        供 validate() 的白名单校验使用。输入必须是已大写化、已移除字符串字面量的
+        SQL（防 'SELECT FROM xxx' 这类字面量误命中）。
+
+        支持的形态（详见 TABLE_REFERENCE_PATTERN 注释）：
+          - FROM dim_region
+          - JOIN fact_order
+          - FROM dw.dim_region （schema.table，取 table 部分）
+          - FROM `dim_region` （反引号包裹，被忽略）
+          - FROM dim_region dr （别名不被提取）
+
+        不支持逗号分隔的多表 FROM（当前 SQL 模板不生成这种形态，遇不到）。
+
+        Args:
+            sql_no_strings_upper: 已处理过的 SQL（大写 + 字面量移除）
+
+        Returns:
+            表名集合（全部大写）。匹配不到返回空集。
+        """
+        tables: set[str] = set()
+        for match in re.finditer(cls.TABLE_REFERENCE_PATTERN, sql_no_strings_upper):
+            # name2 存在说明是 schema.table 形态，取真正的表名 name2；否则取 name
+            table_name = match.group("name2") or match.group("name")
+            if table_name:
+                tables.add(table_name.upper())
+        return tables
+
+    @classmethod
+    def _extract_cte_names(cls, sql_no_strings_upper: str) -> set[str]:
+        """从 SQL 的 WITH 子句中提取 CTE 名
+
+        供 validate() 的白名单校验使用。CTE 是当前 SQL 自己定义的临时表，
+        被 FROM 引用时不应触发"非白名单"拦截。
+
+        匹配形态（详见 CTE_NAME_PATTERN 注释）：
+          - WITH temp AS (...)                → {TEMP}
+          - WITH a AS (...), b AS (...)       → {A, B}
+
+        Args:
+            sql_no_strings_upper: 已处理过的 SQL（大写 + 字面量移除）
+
+        Returns:
+            CTE 名集合（全部大写）。无 WITH 子句返回空集。
+        """
+        names: set[str] = set()
+        for match in re.finditer(cls.CTE_NAME_PATTERN, sql_no_strings_upper):
+            cte_name = match.group("cte")
+            if cte_name:
+                names.add(cte_name.upper())
+        return names

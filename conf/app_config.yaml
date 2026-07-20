@@ -109,6 +109,11 @@ node_profiles:
   generate_intent: strong
   correct_sql: strong
   rewrite_query: strong
+  # 2026-07-20 补登：3 个 recall 节点（之前 _recall_helpers 走全局 llm 快照，绕过了路由；
+  # 现已改用 get_llm(node_name)，必须显式映射才能命中 profile，默认与原行为一致 = strong）
+  recall_column: strong
+  recall_metric: strong
+  recall_value: strong
   # 2026-07-17 改造：Multi-Agent 三个新节点
   # - planner: 拆 sub_query（要复杂推理，必须 strong）
   # - aggregator: 多 sub 结果合并（要复杂推理，必须 strong）

@@ -16,7 +16,6 @@ from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
 from app.agent.nodes._recall_helpers import (
-    expand_keywords_with_llm,
     parallel_recall_dedup,
 )
 from app.agent.state import DataAgentState
@@ -36,15 +35,13 @@ async def recall_metric(state: DataAgentState, runtime: Runtime[DataAgentContext
     try:
         query = state["query"]
         keywords = state["keywords"]
+        # 2026-07-20 改造（#16）：从 state 读 extract_keywords 节点已经算好的扩展词，
+        # 不再各自调 LLM（节省 2 次调用 / 成本 -25%）
+        extended = state.get("extended_keywords_by_dim", {}).get("metric", [])
         embedding_client = runtime.context["embedding_client"]
         metric_qdrant_repository = runtime.context["metric_qdrant_repository"]
 
-        # 1. LLM 扩展指标概念关键词
-        extended = await expand_keywords_with_llm(
-            "extend_keywords_for_metric_recall", query
-        )
-
-        # 2. 构造"单关键词→embedding→qdrant"的检索单元（带 1 次重试，刀 13）
+        # 构造"单关键词→embedding→qdrant"的检索单元（带 1 次重试，刀 13）
         async def _search_one_keyword(keyword: str) -> list[MetricInfo]:
             embedding = await embedding_client.aembed_query(keyword)
             return await retry_once(
@@ -52,7 +49,7 @@ async def recall_metric(state: DataAgentState, runtime: Runtime[DataAgentContext
                 label=f"recall_metric:{keyword}",
             )
 
-        # 3. 并行检索 + 去重
+        # 并行检索 + 去重
         retrieved_metric_infos = await parallel_recall_dedup(
             keywords=keywords + extended,
             search_one=_search_one_keyword,

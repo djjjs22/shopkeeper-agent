@@ -159,14 +159,28 @@ export default function App() {
           }
 
           if (event.type === "result") {
+            // 2026-07-20 (#3)：结果截断时把 truncated 标记带到 message
             return {
               ...message,
               status: "done",
               content: summarizeResult(event.data),
               result: event.data,
+              truncated: event.truncated === true ? true : undefined,
             };
           }
 
+          if (event.type === "warning") {
+            // 2026-07-20 (#6)：warning 累加到 message.warnings，不终止流程
+            const existing = message.warnings ?? [];
+            return {
+              ...message,
+              warnings: existing.includes(event.message)
+                ? existing
+                : [...existing, event.message],
+            };
+          }
+
+          // event.type === "error"
           return {
             ...message,
             status: "error",

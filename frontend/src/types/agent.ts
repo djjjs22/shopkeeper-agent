@@ -13,6 +13,9 @@ export type ProgressEvent = {
 export type ResultEvent = {
   type: "result";
   data: unknown;
+  // 2026-07-20 (#3)：结果集过大时后端会带 truncated=true 和 max_rows
+  truncated?: boolean;
+  max_rows?: number;
 };
 
 export type ErrorEvent = {
@@ -20,7 +23,19 @@ export type ErrorEvent = {
   message: string;
 };
 
-export type AgentEvent = ProgressEvent | ResultEvent | ErrorEvent;
+// 2026-07-20 (#6)：warning 事件（如意图解析失败、结果截断）
+// 与 error 区别：warning 不终止流程，只是提示用户结果可能不完整
+export type WarningEvent = {
+  type: "warning";
+  message: string;
+  step?: string;
+};
+
+export type AgentEvent =
+  | ProgressEvent
+  | ResultEvent
+  | ErrorEvent
+  | WarningEvent;
 
 export type StepState = {
   step: string;
@@ -36,5 +51,7 @@ export type ChatMessage = {
   status?: "streaming" | "done" | "error";
   steps?: StepState[];
   result?: unknown;
+  truncated?: boolean;  // 2026-07-20 (#3)：结果集是否被截断
+  warnings?: string[];  // 2026-07-20 (#6)：累积的 warning 提示
   error?: string;
 };

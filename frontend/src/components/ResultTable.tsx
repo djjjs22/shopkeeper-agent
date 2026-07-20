@@ -5,7 +5,7 @@
  * - 成功零结果：友好空状态（提示常见原因）
  * - 加载/异常：由父组件控制，不在此处渲染
  */
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import { Database, Download, FileJson, FileSpreadsheet, SearchX } from "lucide-react";
 import { downloadFile, timestampedFilename, toCsv, toClipboardText } from "../lib/format";
 import { useToast } from "./Toast";
@@ -177,6 +177,20 @@ function ResultTableImpl({
     }, new Set<string>()),
   );
 
+  // 2026-07-20 (#23)：客户端分页，避免大数据集全量挂 DOM 卡顿
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(0);
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  // 数据变化时回到第一页（避免新查询停留在旧页码）
+  useEffect(() => {
+    setPage(0);
+  }, [data]);
+  const safePage = Math.min(page, totalPages - 1);
+  const pagedRows = rows.slice(
+    safePage * PAGE_SIZE,
+    safePage * PAGE_SIZE + PAGE_SIZE,
+  );
+
   if (Array.isArray(data) && data.length === 0) {
     return <EmptyResult />;
   }
@@ -263,7 +277,7 @@ function ResultTableImpl({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, rowIndex) => (
+            {pagedRows.map((row, rowIndex) => (
               <tr key={rowIndex} className="transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.03]">
                 {columns.map((column) => (
                   <td key={column} className="border-b border-black/5 px-4 py-3 text-gray-800 dark:border-white/5 dark:text-gray-200">
@@ -275,6 +289,35 @@ function ResultTableImpl({
           </tbody>
         </table>
       </div>
+      {totalPages > 1 && (
+        <div className="mt-3 flex items-center justify-between px-1 text-xs text-gray-500 dark:text-gray-400">
+          <span>
+            第 {safePage * PAGE_SIZE + 1}-{Math.min((safePage + 1) * PAGE_SIZE, rows.length)} 行
+            / 共 {rows.length} 行
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setPage(Math.max(0, safePage - 1))}
+              disabled={safePage === 0}
+              className="rounded-md border border-black/10 px-2 py-1 transition hover:bg-black/[0.03] disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/10 dark:hover:bg-white/5"
+            >
+              上一页
+            </button>
+            <span className="px-2 tabular-nums">
+              {safePage + 1} / {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage(Math.min(totalPages - 1, safePage + 1))}
+              disabled={safePage === totalPages - 1}
+              className="rounded-md border border-black/10 px-2 py-1 transition hover:bg-black/[0.03] disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/10 dark:hover:bg-white/5"
+            >
+              下一页
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

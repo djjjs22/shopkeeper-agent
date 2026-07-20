@@ -171,3 +171,152 @@ class TestSQLSafetyValidator:
         """DeLeTe 这种大小写混合写法也应该被拦截（因为校验前转了 upper）"""
         with pytest.raises(ValueError, match="危险关键字"):
             SQLSafetyValidator.validate("DeLeTe FROM fact_order")
+
+    # ════════════════════════════════════════════════
+    # 表名白名单测试（2026-07-20 修复：之前 ALLOWED_TABLES 形同虚设）
+    # ════════════════════════════════════════════════
+
+    def test_非白名单表_应被拦截(self):
+        """SELECT * FROM users —— users 不在白名单"""
+        with pytest.raises(ValueError, match="非白名单表"):
+            SQLSafetyValidator.validate("SELECT * FROM users")
+
+    def test_JOIN中含非白名单表_应被拦截(self):
+        """合法表 JOIN 非法表，应拦截（任何一个越界都不行）"""
+        with pytest.raises(ValueError, match="非白名单表"):
+            SQLSafetyValidator.validate(
+                "SELECT * FROM fact_order"
+                " JOIN users ON fact_order.user_id = users.id"
+            )
+
+    def test_多表全部非法_应列出全部(self):
+        """错误信息里应包含所有越界表名"""
+        with pytest.raises(ValueError, match="USERS"):
+            SQLSafetyValidator.validate(
+                "SELECT * FROM users JOIN passwords ON users.id = passwords.uid"
+            )
+
+    def test_schema前缀合法表_应通过(self):
+        """dw.dim_region 形态：取真正的表名 dim_region 校验，schema 前缀不参与比对"""
+        result = SQLSafetyValidator.validate("SELECT * FROM dw.dim_region")
+        assert "SELECT" in result
+
+    def test_反引号包裹合法表_应通过(self):
+        """`dim_region` 形态：反引号被忽略，提取出的表名进白名单比对"""
+        result = SQLSafetyValidator.validate("SELECT * FROM `fact_order`")
+        assert "SELECT" in result
+
+    def test_大小写混合表名_应通过(self):
+        """大小写不敏感：DIM_REGION 应等同 dim_region"""
+        result = SQLSafetyValidator.validate("SELECT * FROM DIM_REGION")
+        assert "SELECT" in result
+
+    def test_显式自定义白名单_应通过(self):
+        """调用方传 allowed_tables=["users"] 时，users 应放行"""
+        result = SQLSafetyValidator.validate(
+            "SELECT * FROM users", allowed_tables=["users"]
+        )
+        assert "SELECT" in result
+
+    def test_显式传空白名单_应跳过校验(self):
+        """allowed_tables=[] 表示调用方主动关闭白名单（测试/特殊场景用）"""
+        result = SQLSafetyValidator.validate(
+            "SELECT * FROM any_table", allowed_tables=[]
+        )
+        assert "SELECT" in result
+
+    def test_字面量FROM_不应误提取(self):
+        """SELECT 'FROM xxx' AS s —— 'FROM xxx' 在字符串里，被移除后不会误提取表名"""
+        result = SQLSafetyValidator.validate(
+            "SELECT 'FROM users' AS s FROM dim_region"
+        )
+        assert "SELECT" in result
+
+    def test_单CTE引用临时表_应通过(self):
+        """WITH temp AS (...) SELECT * FROM temp —— temp 是 CTE 自定义，应放行"""
+        result = SQLSafetyValidator.validate(
+            "WITH temp AS (SELECT region_id, region_name FROM dim_region)"
+            " SELECT * FROM temp"
+        )
+        assert "SELECT" in result
+
+    def test_多CTE引用临时表_应通过(self):
+        """WITH a AS (...), b AS (...) 多 CTE 一起定义，引用都应放行"""
+        result = SQLSafetyValidator.validate(
+            "WITH r AS (SELECT region_id FROM dim_region),"
+            " f AS (SELECT region_id, SUM(order_amount) AS gmv FROM fact_order GROUP BY region_id)"
+            " SELECT r.region_id FROM f JOIN r ON f.region_id = r.region_id"
+        )
+        assert "SELECT" in result
+
+    def test_CTE体内非白名单表_应被拦截(self):
+        """CTE 名本身放行，但 CTE 体内 FROM 的真实表不在白名单仍要拦"""
+        with pytest.raises(ValueError, match="非白名单表"):
+            SQLSafetyValidator.validate(
+                "WITH temp AS (SELECT * FROM users) SELECT * FROM temp"
+            )
+
+    # ════════════════════════════════════════════════
+    # 2026-07-20 新增（#2 安全加固）：盲区补全测试
+    # ════════════════════════════════════════════════
+
+    def test_SLEEP时间盲注_应被拦截(self):
+        """SLEEP() 时间盲注"""
+        with pytest.raises(ValueError, match="注入特征"):
+            SQLSafetyValidator.validate(
+                "SELECT * FROM dim_region WHERE 1=1 AND SLEEP(30)"
+            )
+
+    def test_BENCHMARK时间盲注_应被拦截(self):
+        """BENCHMARK() 时间盲注"""
+        with pytest.raises(ValueError, match="注入特征"):
+            SQLSafetyValidator.validate(
+                "SELECT BENCHMARK(10000000, MD5('x')) FROM dim_region"
+            )
+
+    def test_information_schema访问_应被拦截(self):
+        """information_schema 系统表访问"""
+        with pytest.raises(ValueError, match="注入特征"):
+            SQLSafetyValidator.validate(
+                "SELECT table_name FROM information_schema.tables"
+                " WHERE table_schema = 'dw'"
+            )
+
+    def test_mysql系统库访问_应被拦截(self):
+        """mysql.user 等系统库访问"""
+        with pytest.raises(ValueError, match="注入特征"):
+            SQLSafetyValidator.validate(
+                "SELECT user, host FROM mysql.user"
+            )
+
+    def test_INTO_OUTFILE写文件_应被拦截(self):
+        """SELECT ... INTO OUTFILE 写文件"""
+        with pytest.raises(ValueError):  # 关键字 OUTFILE 或注入特征都会拦
+            SQLSafetyValidator.validate(
+                "SELECT * FROM dim_region INTO OUTFILE '/tmp/x'"
+            )
+
+    def test_LOAD_FILE读文件_应被拦截(self):
+        """LOAD_FILE() 读服务器文件"""
+        with pytest.raises(ValueError):
+            SQLSafetyValidator.validate(
+                "SELECT LOAD_FILE('/etc/passwd') FROM dim_region"
+            )
+
+    def test_CALL存储过程_应被拦截(self):
+        """CALL 关键字（执行存储过程）"""
+        with pytest.raises(ValueError, match="危险关键字"):
+            SQLSafetyValidator.validate("CALL p_archive()")
+
+    def test_SET修改session变量_应被拦截(self):
+        """SET 关键字（修改 session 变量）"""
+        with pytest.raises(ValueError, match="危险关键字"):
+            SQLSafetyValidator.validate("SET sql_mode = 'STRICT_TRANS_TABLES'")
+
+    def test_块注释分割UNION_应被拦截(self):
+        """UNION/**/SELECT 用块注释分割绕过关键字检测"""
+        with pytest.raises(ValueError, match="注入特征"):
+            SQLSafetyValidator.validate(
+                "SELECT * FROM dim_region WHERE id = 1"
+                " UNION/**/SELECT user, password FROM dim_customer"
+            )

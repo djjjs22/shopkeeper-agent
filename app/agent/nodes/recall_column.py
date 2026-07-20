@@ -16,7 +16,6 @@ from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
 from app.agent.nodes._recall_helpers import (
-    expand_keywords_with_llm,
     parallel_recall_dedup,
 )
 from app.agent.state import DataAgentState
@@ -36,15 +35,13 @@ async def recall_column(state: DataAgentState, runtime: Runtime[DataAgentContext
     try:
         query = state["query"]
         keywords = state["keywords"]
+        # 2026-07-20 改造（#16）：从 state 读 extract_keywords 节点已经算好的扩展词，
+        # 不再各自调 LLM（节省 2 次调用 / 成本 -25%）
+        extended = state.get("extended_keywords_by_dim", {}).get("column", [])
         column_qdrant_repository = runtime.context["column_qdrant_repository"]
         embedding_client = runtime.context["embedding_client"]
 
-        # 1. LLM 扩展字段语义关键词
-        extended = await expand_keywords_with_llm(
-            "extend_keywords_for_column_recall", query
-        )
-
-        # 2. 构造"单关键词→embedding→qdrant"的检索单元
+        # 构造"单关键词→embedding→qdrant"的检索单元
         # 重试工具要求传入协程工厂（lambda），每次重新创建协程避免已消费
         async def _search_one_keyword(keyword: str) -> list[ColumnInfo]:
             embedding = await embedding_client.aembed_query(keyword)
@@ -54,7 +51,7 @@ async def recall_column(state: DataAgentState, runtime: Runtime[DataAgentContext
                 label=f"recall_column:{keyword}",
             )
 
-        # 3. 并行检索 + 去重
+        # 并行检索 + 去重
         retrieved_column_infos = await parallel_recall_dedup(
             keywords=keywords + extended,
             search_one=_search_one_keyword,

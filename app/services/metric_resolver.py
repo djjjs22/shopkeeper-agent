@@ -43,11 +43,10 @@ metric = await resolver.lookup("支付成功率")
 
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import Any, Optional
 
+from app.core.ttl_cache import TTLCache
 from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
-
 
 # ─────────────────────────────────────────────────────────────────────
 # 依赖注入容器
@@ -70,7 +69,12 @@ class MetricResolver:
 # 单点 API：查找业务指标
 # ─────────────────────────────────────────────────────────────────────
 
-_METRIC_CACHE: dict[str, dict[str, Any] | None] = {}
+# 2026-07-20：从普通 dict 改成 TTLCache
+# 旧实现永不过期、无上限，用户输入各种同义词/错别字会让缓存无限增长（内存泄漏），
+# 元数据更新后也不失效。TTL=1h、maxsize=512 防泄漏且定期刷新。
+_METRIC_CACHE: TTLCache[str, dict[str, Any] | None] = TTLCache(
+    maxsize=512, ttl=3600.0
+)
 
 
 def _normalize_text(text: str) -> str:
@@ -111,9 +115,12 @@ async def lookup_business_metric(
             }
         没找到返回 None（让调用方走"通用业务知识"降级分支）
     """
-    # 1. 缓存优先
-    if use_cache and metric_name in _METRIC_CACHE:
-        return _METRIC_CACHE[metric_name]
+    # 1. 缓存优先（用哨兵区分"未命中"和"已知不存在"）
+    if use_cache:
+        _MISSING = object()
+        cached = _METRIC_CACHE.get(metric_name, _MISSING)
+        if cached is not _MISSING:
+            return cached  # 命中，可能是 None（已查过且确实不存在）
 
     # 2. 没有 repository：返回 None（让 LLM 走通用知识）
     if resolver is None or resolver.meta_mysql_repository is None:
@@ -165,7 +172,7 @@ async def lookup_business_metric(
     # 5. 没找到：写 None 缓存，返回 None
     if candidate is None:
         if use_cache:
-            _METRIC_CACHE[metric_name] = None
+            _METRIC_CACHE.set(metric_name, None)
         return None
 
     # 6. 归一化输出
@@ -198,7 +205,7 @@ async def lookup_business_metric(
 
     # 7. 写缓存
     if use_cache:
-        _METRIC_CACHE[metric_name] = result
+        _METRIC_CACHE.set(metric_name, result)
 
     return result
 

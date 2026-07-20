@@ -21,6 +21,7 @@
 2. inherited_from_history 新增：从历史提取三类继承信息（实体/条件/维度）
 """
 
+import asyncio
 from datetime import date, timedelta
 from typing import Any
 
@@ -28,20 +29,20 @@ from typing import Any
 # 场景：改写 query（think 块会污染 query 字段，污染下游）
 # 详见 app/core/safe_json_parser.py 顶部 + docs/notes/eval_e2e_think兼容改造-20260711.md
 from langchain_core.output_parsers import StrOutputParser  # noqa: F401  # 保留以备回滚
-
-# 2026-07-11 改造：StrOutputParser → StripThinkStrParser
-# 场景：改写 query（think 块污染 query 字段，污染下游节点）
-# 详见 app/core/safe_json_parser.py 顶部 + docs/notes/eval_e2e_think兼容改造-20260711.md
-# 注意：这个文件用的是 _build_strip_parser_runnable（项目自定义的可运行封装），效果同 StripThinkStrParser
-from app.core.safe_json_parser import SafeJsonOutputParser, _build_strip_parser_runnable
 from langchain_core.prompts import PromptTemplate
-from app.core.timing import timed_node
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
 from app.agent.llm import get_llm
 from app.agent.state import DataAgentState, InheritedContext, TimeRangeState
 from app.core.log import logger
+
+# 2026-07-11 改造：StrOutputParser → StripThinkStrParser
+# 场景：改写 query（think 块污染 query 字段，污染下游节点）
+# 详见 app/core/safe_json_parser.py 顶部 + docs/notes/eval_e2e_think兼容改造-20260711.md
+# 注意：这个文件用的是 _build_strip_parser_runnable（项目自定义的可运行封装），效果同 StripThinkStrParser
+from app.core.safe_json_parser import SafeJsonOutputParser, _build_strip_parser_runnable
+from app.core.timing import timed_node
 from app.prompt.prompt_loader import load_prompt
 
 
@@ -350,7 +351,12 @@ async def rewrite_query(state: DataAgentState, runtime: Runtime[DataAgentContext
         query = state["query"]
         history = state.get("history", [])
 
-        # ── 第一步：省略补全 + 时间标准化（原有逻辑）──
+        # ── 第一步 + 第二步并行（2026-07-20 优化）──
+        # 第一步：省略补全 + 时间标准化（输入：query + history）
+        # 第二步：提取历史继承（输入：query + history）
+        # 两者输入独立，第二步不依赖第一步输出，原串行实现白白多走一个 LLM RTT。
+        # 改用 asyncio.gather 并发，单次问数节省 ~500ms-2s（一个 LLM 往返）。
+        # gather 默认 fail-fast：任一抛错立即抛出，进入下面统一的 except 兜底。
         prompt = PromptTemplate(
             template=load_prompt("rewrite_query"),
             template_format="jinja2",
@@ -358,21 +364,22 @@ async def rewrite_query(state: DataAgentState, runtime: Runtime[DataAgentContext
         )
         chain = prompt | llm | _build_strip_parser_runnable()
 
-        # LLM 负责语义层面的补全和时间表达标准化
-        rewritten = await chain.ainvoke({
+        rewritten_task = chain.ainvoke({
             "query": query,
             "history": _format_history_for_prompt(history),
         })
+        inherited_task = _extract_inherited_context(llm, query, history)
+
+        rewritten, inherited = await asyncio.gather(
+            rewritten_task, inherited_task
+        )
         rewritten = rewritten.strip()
 
         # 程序确定性解析：把标准化的时间表达替换成具体日期范围
         # 这一步保证日期计算不会出错，不依赖 LLM 的数学能力
         # 2026-07-14 改造：返回 (清理后文本, TimeRangeState)
         # 文本里不再有日期字符串，时间单独落到结构化字段
-        rewritten, time_range = _resolve_relative_time(rewritten)
-
-        # ── 第二步：提取历史继承（2026-07-14 新增）──
-        inherited = await _extract_inherited_context(llm, query, history)
+        _, time_range = _resolve_relative_time(rewritten)
 
         logger.info(
             f"查询改写: query={query!r} time_range={dict(time_range)} "

@@ -169,7 +169,10 @@ export function mapHttpError(status: number): FriendlyError {
 
 /**
  * 把后端 SSE error 事件的 message 转友好错误
- * 优先关键字匹配，否则保留原 message 让用户看到具体信息
+ * 优先关键字匹配，否则用通用兜底（不再透传原文，防敏感信息泄露）
+ *
+ * 2026-07-20 (#1 脱敏)：后端已经在 query_service / run_sql 统一脱敏，
+ * 这里再兜一层：万一后端遗漏，前端也不会把 SQL / 表名 / 列名显示给用户。
  */
 export function mapBackendMessage(message: string): FriendlyError {
   for (const { pattern, error } of BACKEND_KEYWORD_MAP) {
@@ -177,10 +180,10 @@ export function mapBackendMessage(message: string): FriendlyError {
       return error;
     }
   }
-  // 没匹配到关键字 → 透传后端消息（可能是具体业务错误）
+  // 没匹配到关键字 → 通用兜底（不透传原文，避免敏感信息泄露）
   return {
     title: "查询失败",
-    detail: message || "后端返回了未识别的错误，请稍后重试或联系管理员。",
+    detail: "已记录日志，请换一种问法或稍后重试。",
     toastType: "error",
     retryable: true,
   };

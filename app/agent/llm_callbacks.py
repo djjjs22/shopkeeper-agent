@@ -49,6 +49,7 @@ class LLMTimingCallback(BaseCallbackHandler):
         # 不用 super().__init__() —— BaseCallbackHandler.__init__ 是空操作
         self._start_ts: float | None = None
         self._model_name: str = "unknown"
+        self._profile: str = "unknown"  # 2026-07-20 (#22): 用于 metrics 归属
 
     def on_llm_start(
         self,
@@ -72,6 +73,10 @@ class LLMTimingCallback(BaseCallbackHandler):
         所以三个字段都尝试，按优先级回退。
         """
         self._start_ts = time.perf_counter()
+
+        # 2026-07-20 (#22)：从 metadata 提取 profile（llm.py _build_model 挂的）
+        if isinstance(metadata, dict):
+            self._profile = metadata.get("profile", "unknown")
 
         # 防御性：serialized 可能是 None / 非 dict（部分 langchain 子类会传）
         if not isinstance(serialized, dict):
@@ -143,6 +148,20 @@ class LLMTimingCallback(BaseCallbackHandler):
             f"prompt={prompt_tokens} completion={completion_tokens}"
         )
 
+        # 2026-07-20 (#22)：聚合到进程级 metrics collector
+        try:
+            from app.agent.llm_metrics import get_metrics_collector
+
+            get_metrics_collector().record_call(
+                profile=self._profile,
+                prompt_tokens=prompt_tokens or 0,
+                completion_tokens=completion_tokens or 0,
+                duration_ms=duration_ms,
+            )
+        except Exception:
+            # metrics 失败不影响主链路
+            pass
+
         # 重置状态（同一 handler 实例可能被复用）
         self._start_ts = None
 
@@ -168,5 +187,15 @@ class LLMTimingCallback(BaseCallbackHandler):
             f"llm error model={self._model_name} duration_ms={duration_ms} "
             f"error_type={type(error).__name__}: {error}"
         )
+
+        # 2026-07-20 (#22)：错误也记入 metrics
+        try:
+            from app.agent.llm_metrics import get_metrics_collector
+
+            get_metrics_collector().record_error(
+                profile=self._profile, duration_ms=duration_ms
+            )
+        except Exception:
+            pass
 
         self._start_ts = None

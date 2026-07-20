@@ -200,8 +200,16 @@ def get_registry() -> LLMRegistry:
     return _registry
 
 
-# 老代码兼容：直接 import llm 等同于 strong profile
-# 新代码优先用 get_llm("节点名")，老 import 不报错
+# ============================================================================
+# DEPRECATED（2026-07-20 #21 配置统一）：
+# ============================================================================
+# 老代码 `from app.agent.llm import llm` 的兼容入口。**生产代码已全部迁移到
+# get_llm(node_name)**（grep `from app.agent.llm import llm` 在 app/ 下零命中）。
+# 这里保留只是因为：
+#   1. test_llm_registry.py 显式测了"老 import 仍可用"
+#   2. 简单部署场景（只配了 yaml.llm 没配 llm_profiles）的兜底
+# 新代码不要再用这个全局变量，统一走 get_llm("节点名")。
+# ============================================================================
 try:
     llm: BaseChatModel = _registry.get("strong")
 except KeyError:

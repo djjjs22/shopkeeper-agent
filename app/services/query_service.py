@@ -14,20 +14,41 @@
   扩展被历史话题污染（详见 RFC 刀5）。
 """
 
+import asyncio
 import json
 
 from langchain_huggingface import HuggingFaceEndpointEmbeddings
 
 from app.agent.context import DataAgentContext
 from app.agent.graph import graph
-from app.agent.state import DataAgentState
+from app.agent.state import DataAgentState, MultiAgentState
 from app.agent.supervisor_graph import supervisor_graph
+from app.core.log import logger
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
 from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
 from app.repositories.qdrant.column_qdrant_repository import ColumnQdrantRepository
 from app.repositories.qdrant.metric_qdrant_repository import MetricQdrantRepository
 from app.services.session_store import add_message, get_history
+
+# ─────────────────────────────────────────────────────────────────────
+# 错误脱敏（2026-07-20 #1）：给前端的友好文案，避免泄露 SQL/表结构
+# ─────────────────────────────────────────────────────────────────────
+_SERVICE_ERROR_MAP: list[tuple[str, str]] = [
+    ("timeout", "请求超时，请缩小查询范围或换更精确的条件"),
+    ("connection", "服务连接异常，请稍后重试"),
+    ("rate", "请求过于频繁，请稍后再试"),
+    ("memory", "查询结果过大，请加更精确的筛选条件"),
+]
+
+
+def _friendly_error(exc: Exception) -> str:
+    """服务层异常 → 前端友好文案（不透传 str(exc) 原文）"""
+    msg = str(exc).lower()
+    for pattern, friendly in _SERVICE_ERROR_MAP:
+        if pattern in msg:
+            return friendly
+    return "处理失败，已记录日志，请换一种问法或稍后重试"
 
 
 class QueryService:
@@ -73,7 +94,8 @@ class QueryService:
         # 拿历史对话（与 query() 一致）
         history = await get_history(session_id, max_count=3)
 
-        state = DataAgentState(query=query, history=history)
+        # 2026-07-20 (#10)：multi-agent 路径用 MultiAgentState（含 plan/sub_results 等字段）
+        state = MultiAgentState(query=query, history=history)
         context = DataAgentContext(
             column_qdrant_repository=self.column_qdrant_repository,
             embedding_client=self.embedding_client,
@@ -93,12 +115,17 @@ class QueryService:
                 yield f"data: {json.dumps(chunk, ensure_ascii=False, default=str)}\n\n"
 
             if last_result is not None:
-                await add_message(session_id, "user", query)
+                # ⭐ 2026-07-20 优化：两次 add_message 并行（同 query() 路径）
                 result_text = str(last_result)[:200]
-                await add_message(session_id, "assistant", result_text)
+                await asyncio.gather(
+                    add_message(session_id, "user", query),
+                    add_message(session_id, "assistant", result_text),
+                )
 
         except Exception as e:
-            error = {"type": "error", "message": str(e)}
+            # 2026-07-20（#1 脱敏）：服务端记完整异常，给前端友好文案
+            logger.exception(f"[query_multi_agent] 链路异常: {e}")
+            error = {"type": "error", "message": _friendly_error(e)}
             yield f"data: {json.dumps(error, ensure_ascii=False, default=str)}\n\n"
 
     async def query(self, query: str, session_id: str = "default"):
@@ -142,13 +169,19 @@ class QueryService:
             # ⭐ L1 存：把本轮对话写回 session_store
             # 只有成功拿到结果才记录（失败的不污染历史）
             if last_result is not None:
-                await add_message(session_id, "user", query)
+                # ⭐ 2026-07-20 优化：两次 add_message 并行（不同 key 写 Redis 原子，
+                # 同 key 也是 RPUSH 互不冲突），消除 1 个 Redis RTT 的尾延迟
+                result_text = str(last_result)[:200]  # 截断防止存太大
                 # 注意：这里存的是用户原始 query，不是 enhanced_query
                 # 否则历史里全是"【对话历史】...【任务类型】..."这种元数据
-                result_text = str(last_result)[:200]  # 截断防止存太大
-                await add_message(session_id, "assistant", result_text)
+                await asyncio.gather(
+                    add_message(session_id, "user", query),
+                    add_message(session_id, "assistant", result_text),
+                )
 
         except Exception as e:
             # 流式接口已经开始返回后不能再改 HTTP 状态码，因此把异常也包装成一条 SSE 消息
-            error = {"type": "error", "message": str(e)}
+            # 2026-07-20（#1 脱敏）：服务端记完整异常，给前端友好文案
+            logger.exception(f"[query] 链路异常: {e}")
+            error = {"type": "error", "message": _friendly_error(e)}
             yield f"data: {json.dumps(error, ensure_ascii=False, default=str)}\n\n"

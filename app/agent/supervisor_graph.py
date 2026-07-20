@@ -36,7 +36,7 @@ from langgraph.types import Send
 
 from app.agent.context import DataAgentContext
 from app.agent.llm import get_llm
-from app.agent.state import DataAgentState
+from app.agent.state import DataAgentState, MultiAgentState
 from app.agent.graph import graph as legacy_graph  # 老 graph 仍用于单 sub_query 兜底
 from app.agent.data_subgraph import get_preprocessing_subgraph, get_postprocess_subgraph
 from app.agent.nodes.planner_node import planner
@@ -131,7 +131,7 @@ async def _run_preprocessing_once(query: str, base_state: dict, context, pre_sub
     return {k: final_state.get(k) for k in shared_keys if k in final_state}
 
 
-async def _gather_sub_results(state: DataAgentState) -> dict[str, Any]:
+async def _gather_sub_results(state: MultiAgentState) -> dict[str, Any]:
     """Multi-Agent 数据执行节点：
     1. 跑 1 次共享前置 subgraph（节省 classify/rewrite/recall 重复时间）
     2. 对每个 sub_query 跑后置 subgraph（按 depends_on 分层并行）
@@ -163,6 +163,13 @@ async def _gather_sub_results(state: DataAgentState) -> dict[str, Any]:
     post_subgraph = get_postprocess_subgraph()
 
     # 优化：retry 时复用上次的前置结果（避免 reviewer 触发 retry 重复跑 16s）
+    # ⚠️ 已知权衡（2026-07-20 #11）：
+    #   planner retry 时若重新拆出不同 sub_query 拓扑，cached_pre_state 里的
+    #   retrieved_* 仍按旧 sub_query 语义检索，可能跟新 sub_query 不匹配。
+    #   实际场景下 reviewer 反馈主要影响 generate_intent/SQL 生成层，planner
+    #   很少重新拆分，所以保留 cache 的收益（省 16s）大于风险。
+    #   如果未来发现 reviewer retry 时结果异常，可在这里加 plan_signature 检查：
+    #   比对当前 plan 与 cached 时的 plan 拓扑，不一致就清空 cache 强制重跑。
     cached_pre = state.get("cached_pre_state")
     if cached_pre is not None:
         logger.info("复用上次共享前置结果（避免重跑 16s）")
@@ -254,7 +261,7 @@ def build_supervisor_graph():
         graph = build_supervisor_graph()
         result = await graph.ainvoke({"query": "..."}, context=DataAgentContext(...))
     """
-    g = StateGraph(state_schema=DataAgentState, context_schema=DataAgentContext)
+    g = StateGraph(state_schema=MultiAgentState, context_schema=DataAgentContext)
 
     # 注册节点
     g.add_node("planner", planner)

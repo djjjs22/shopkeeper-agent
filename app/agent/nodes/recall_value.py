@@ -16,7 +16,6 @@ from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
 from app.agent.nodes._recall_helpers import (
-    expand_keywords_with_llm,
     parallel_recall_dedup,
 )
 from app.agent.state import DataAgentState
@@ -34,14 +33,12 @@ async def recall_value(state: DataAgentState, runtime: Runtime[DataAgentContext]
     try:
         query = state["query"]
         keywords = state["keywords"]
+        # 2026-07-20 改造（#16）：从 state 读 extract_keywords 节点已经算好的扩展词，
+        # 不再各自调 LLM（节省 2 次调用 / 成本 -25%）
+        extended = state.get("extended_keywords_by_dim", {}).get("value", [])
         value_es_repository = runtime.context["value_es_repository"]
 
-        # 1. LLM 扩展"可能出现在字段值里的词"
-        extended = await expand_keywords_with_llm(
-            "extend_keywords_for_value_recall", query
-        )
-
-        # 2. 并行检索 + 去重（具体并行化与异常隔离在 helper 里）
+        # 并行检索 + 去重（具体并行化与异常隔离在 helper 里）
         retrieved_value_infos = await parallel_recall_dedup(
             keywords=keywords + extended,
             search_one=value_es_repository.search,

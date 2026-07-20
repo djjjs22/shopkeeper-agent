@@ -16,6 +16,29 @@
 
 ---
 
+### 2026-07-20: 默认参数若只在 docstring 承诺、函数体没实现 = 埋坑
+
+**场景**: `app/core/sql_safety.py` 的 `validate(sql, allowed_tables=None)` —— docstring 写"不传则使用类默认的 ALLOWED_TABLES"，但函数体里压根没用这个参数。`ALLOWED_TABLES` 类变量定义了 5 张表，看着像生效了，实际形同虚设。修法见 `git log` 2026-07-20 这次提交（补 `_extract_tables` + `_extract_cte_names`，并在注入检测之后做白名单比对）。
+
+**规则**:
+1. **加默认参数必须同步实现**：写 `Optional[X] = None` 的同时就要写"`None` 时用什么默认值"的实际代码，不能只在 docstring 里口头承诺。
+2. **类变量定义了就要在某处被读到**：如果定义了 `ALLOWED_TABLES` 这种"看起来是配置"的类变量，必须 grep 一遍代码确认它真的被用，否则就是误导后续读者。
+3. **新加的校验层要补正向 + 负向测试**：白名单这种安全功能，至少要测「合法表通过 / 非法表拦截 / 边界形态（CTE、schema 前缀、反引号、字面量）」四类，否则等于没测。
+4. **测试顺序敏感**：多层校验里，注入检测必须先于表名白名单——否则 `UNION SELECT ... FROM users` 会被报成"非白名单表"而不是"注入"，错误分类错位。
+
+---
+
+### 2026-07-20: 改 helper 签名时，调用方一处都不能漏
+
+**场景**: `_recall_helpers.py` 的 `expand_keywords_with_llm(prompt_name, query)` 改成 `(..., node_name)` 后，3 个 recall 节点（recall_column / recall_metric / recall_value）都要补传 `node_name`，同时 `conf/app_config.yaml` 的 `node_profiles` 也要补 3 个映射——否则 `get_llm(node_name)` 会 `KeyError`。
+
+**规则**:
+1. **改公共 helper 签名 → 列全所有调用点**：用 `grep -rn "expand_keywords_with_llm\|parallel_recall_dedup" app/` 之类命令找全，逐个确认改完。
+2. **配置驱动的路由，改代码同时改配置**：节点走 `get_llm(node_name)` 时，`node_profiles` 必须有该节点的映射，否则运行时才炸（单测覆盖不到的话会漏）。
+3. **既有测试 monkeypatch 失效是信号**：`_install_fake_llm` patch `m.llm = fake` 这种老风格，对走 `get_llm` 的新节点（generate_intent / 3 个 recall）已经失效——这是既有技术债，发现时记录但不顺手扩范围修，下次专门治理。
+
+---
+
 ## Working Prompts
 
 以下是藤子日常工作中使用的标准提示词模板，作为可复用的指令集。

@@ -6,6 +6,16 @@ import type { AgentEvent } from "../types/agent";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
 
+// 2026-07-20 (#4 鉴权)：可选 API Key，配合后端 QUERY_API_KEY 环境变量
+// 未配置 VITE_QUERY_API_KEY 时为空，后端也不强制（本地开发两都不设即可）
+const QUERY_API_KEY = import.meta.env.VITE_QUERY_API_KEY ?? "";
+
+function authHeaders(): Record<string, string> {
+  return QUERY_API_KEY
+    ? { Authorization: `Bearer ${QUERY_API_KEY}` }
+    : {};
+}
+
 /**
  * API 错误：携带 HTTP 状态码，让前端能映射到友好提示
  * 字段 `status` 用于 errorMessages.mapHttpError 分类
@@ -33,6 +43,7 @@ export async function streamQuery(query: string, options: QueryOptions) {
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
+      ...authHeaders(),
     },
     body: JSON.stringify({
       query,
@@ -62,6 +73,9 @@ export async function streamQuery(query: string, options: QueryOptions) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
+  // 2026-07-20 (#23)：跟踪是否收到过 result/error 终止事件
+  // 流意外断开且没终止事件 → 推一个 warning 让前端 UI 提示用户
+  let terminated = false;
 
   while (true) {
     const { value, done } = await reader.read();
@@ -74,6 +88,9 @@ export async function streamQuery(query: string, options: QueryOptions) {
     for (const chunk of chunks) {
       const event = parseSseChunk(chunk);
       if (event) {
+        if (event.type === "result" || event.type === "error") {
+          terminated = true;
+        }
         options.onEvent(event);
       }
     }
@@ -82,7 +99,18 @@ export async function streamQuery(query: string, options: QueryOptions) {
   buffer += decoder.decode();
   const tail = parseSseChunk(buffer);
   if (tail) {
+    if (tail.type === "result" || tail.type === "error") {
+      terminated = true;
+    }
     options.onEvent(tail);
+  }
+
+  // 流结束但没拿到 result/error → 连接中断，提示用户
+  if (!terminated) {
+    options.onEvent({
+      type: "warning",
+      message: "连接中断，未能拿到完整结果。请重新发起查询。",
+    });
   }
 }
 
@@ -94,7 +122,7 @@ export async function streamQuery(query: string, options: QueryOptions) {
 export async function clearSession() {
   const response = await fetch(`${API_BASE_URL}/api/clear-session`, {
     method: "POST",
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", ...authHeaders() },
   });
   if (!response.ok) {
     throw new ApiError(`清空会话失败：HTTP ${response.status}`, response.status);
