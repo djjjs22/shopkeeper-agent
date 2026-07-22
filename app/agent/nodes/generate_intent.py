@@ -305,14 +305,25 @@ async def generate_intent(state: DataAgentState, runtime: Runtime[DataAgentConte
         #   intent["where"] 头部，**不依赖 LLM 拼时间条件**。
         # 2026-07-17 业务约束：仅对 dim_date 关联的 fact 表（fact_order）注入，
         #   防止给非时间维表加错条件。
+        # 2026-07-22 修复：用 intent["from"] 解析出的别名（如 fo），而不是硬编码 fact_order。
+        #   改前硬编码 fact_order.date_id，但 SQL 用了别名 fo（FROM fact_order fo），
+        #   MySQL 不允许别名后用原表名引用 → Unknown column 'fact_order.date_id'。
         if time_range and time_range.get("start_date") and time_range.get("end_date"):
             where_list = intent.get("where")
             if not isinstance(where_list, list):
                 where_list = []
             start_dash = time_range["start_date"].replace("-", "")
             end_dash = time_range["end_date"].replace("-", "")
+
+            # 从 intent["from"] 解析别名：{"from": "fact_order fo"} → "fo"
+            # 没别名时退化为不带表前缀（单表 WHERE 里 date_id 不歧义）
+            from_clause = intent.get("from", "")
+            from_parts = str(from_clause).strip().split()
+            # 格式："fact_order fo" → ["fact_order", "fo"]；"fact_order" → ["fact_order"]
+            table_alias = from_parts[1] if len(from_parts) >= 2 else None
+            col_prefix = f"{table_alias}." if table_alias else ""
             time_clause = (
-                f"fact_order.date_id BETWEEN {start_dash} AND {end_dash}"
+                f"{col_prefix}date_id BETWEEN {start_dash} AND {end_dash}"
             )
             # 头部插入（避免 LLM 已拼的 where 把它夹在中间）
             where_list.insert(0, time_clause)

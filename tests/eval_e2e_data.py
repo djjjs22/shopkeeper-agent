@@ -341,9 +341,9 @@ TEST_CASES_E2E = [
     {
         "query": "商品动销率",
         "expected_sql": """SELECT
-                            COUNT(DISTINCT CASE WHEN order_quantity > 0 THEN product_id END) * 1.0
-                            / (SELECT COUNT(*) FROM dim_product) AS 动销率
-                          FROM fact_order""",
+                            COUNT(DISTINCT CASE WHEN fo.order_quantity > 0 THEN fo.product_id END) * 1.0
+                            / (SELECT COUNT(DISTINCT product_id) FROM dim_product) AS 动销率
+                          FROM fact_order fo""",
         "difficulty": "复杂业务指标",
     },
     {

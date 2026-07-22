@@ -21,7 +21,13 @@
 - "环比增长率是多少" → data_query（要查派生指标的具体数值，不是询问定义）
 - "同比增长率是多少" → data_query
 - "转化率/留存率/复购率是多少" → data_query（统一规则：派生指标+"是多少"都查数据）
-- "你能做什么" → chitchat（询问 Agent 能力）
+
+关键区分规则（最容易误判）：
+- "XX率"（动销率/复购率/转化率/留存率/流失率/达成率/占比）单独出现 → data_query
+  理由：用户说"商品动销率"是要查这个指标的数值，不是问"动销率怎么定义"
+- 只有"XX是什么/XX怎么算/XX定义"才归 metadata_query
+- 只要 query 里出现具体指标名（哪怕没带"是多少"），默认 data_query
+- 例外：query 明确问"有哪些指标/指标列表"→ metadata_query
 
 输出要求：
 - 只输出一个单词：chitchat / metadata_query / data_query

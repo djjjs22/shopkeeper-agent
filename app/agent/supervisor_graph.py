@@ -237,6 +237,15 @@ async def _gather_sub_results(state: MultiAgentState, runtime: Runtime[DataAgent
         f"multi-agent 全部完成: {len(ordered)} 个 sub_query, "
         f"总耗时 {sum(r['duration_ms'] for r in ordered)} ms"
     )
+    # 2026-07-22 debug：aggregator 收到空 sub_results 的根因排查
+    # 在 return 前打印实际要 return 的内容，确认 ordered 非空
+    logger.warning(
+        f"[DEBUG _gather_sub_results return] "
+        f"ordered_len={len(ordered)}, "
+        f"ordered_sub_ids={[r.get('sub_id') for r in ordered]}, "
+        f"ordered_rows_lens={[len(r.get('rows', [])) for r in ordered]}, "
+        f"plan_id={id(plan)}, plan_sub_queries_len={len(plan.sub_queries) if plan else 'None'}"
+    )
     # 保留共享前置结果到 state —— reviewer retry 时复用，避免再跑 16s
     # ⚠️ 2026-07-20 修复：MultiAgentState 字段没用 Annotated reducer，默认 LastValue OVERWRITE。
     # 节点返回 dict 时各 channel 独立更新，本节点之前写入的字段（plan / query / history）

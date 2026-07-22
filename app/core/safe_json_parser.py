@@ -49,6 +49,14 @@ from langchain_core.output_parsers import BaseOutputParser
 # 改前会污染 JSON 解析，必须剥掉
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
+# 2026-07-22 修复：匹配**未闭合**的 think 块（只有 <think> 开头，没有 </think>）
+# 场景：MiniMax-M3 遇到复杂 query（环比/动销率等派生指标）时会输出超长 think 推理，
+# 有时 LLM 输出被 max_tokens 截断或模型"忘了"闭合 think 标签，
+# 导致上面的 _THINK 正则（要求 </think> 闭合）匹配不到 → 整段 think 被当成正常文本
+# → JSON 解析失败 → generate_intent 降级空 intent → SELECT 1 fallback。
+# 修复：剥掉从 <think> 到字符串结尾的所有内容（未闭合兜底）。
+_THINK_UNCLOSED = re.compile(r"<think>.*", re.DOTALL | re.IGNORECASE)
+
 # 匹配 ```json ... ``` 围栏
 # 例：```json\n{"foo": "bar"}\n```
 _JSON_FENCE = re.compile(r"```json\s*(.*?)```", re.DOTALL | re.IGNORECASE)
@@ -89,6 +97,9 @@ def _strip_think(text: str) -> str:
         output: '{"a":1}'
     """
     text = _THINK.sub("", text).strip()
+    # 2026-07-22：再剥未闭合的 think 块（<think> 开头但没 </think> 结尾）
+    # 放在 _THINK 之后：先处理正常闭合的，剩下的如果有裸 <think> 开头就全删
+    text = _THINK_UNCLOSED.sub("", text).strip()
     m = _JSON_FENCE.search(text)
     if m:
         return m.group(1).strip()
