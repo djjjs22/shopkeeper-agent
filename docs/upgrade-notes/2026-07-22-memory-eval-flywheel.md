@@ -439,18 +439,25 @@ DB_PORT=3307 uv run uvicorn app.main:app --reload
 
 ## 12. 下一步待办
 
-### 高优先级
+### 已修复（2026-07-22 晚，第二轮）
+- [x] **think 块未闭合**（最关键 bug）：MiniMax-M3 遇到派生指标（环比/动销率）会输出
+      超长 `<think>` 推理，有时未闭合 `</think>`，导致 `_strip_think` 匹配不到 →
+      JSON 解析失败 → SELECT 1 fallback。修复：`safe_json_parser.py` 加
+      `_THINK_UNCLOSED` 正则。验证：环比 -0.681 / 动销率 30% 都正确返回。
+- [x] **classify_intent 误判 XX率**：动销率被误判 metadata_query。prompt 强化规则。
+- [x] **动销率 gold SQL 语义错**：没 JOIN dim_product，永远 100%。已修。
+- [x] **order_date 别名 bug**（预存）：硬编码 fact_order.date_id 与别名 fo 冲突。
+
+### 高优先级（未修）
 - [ ] **全量跑 59 条 eval** 更新 baseline（15 条只是子集）
   ```bash
   DB_PORT=3307 uv run python -m tests.eval_e2e  # 8-10 分钟，提高 timeout
   cp tests/results/eval_e2e_<最新ts>.json tests/results/baseline.json
   ```
-- [ ] **配 GitHub Secrets** 启用 CI（网络通时）
-  - repo: `github.com/djjjs22/shopkeeper-agent`
-  - 9 个 secret（见 upgrade-changelog.md）
-- [ ] **修 2 条空 intent case**（"订单平均金额" / "有哪些支付方式"）
-  - generate_intent 对这俩返空 → SELECT 1 fallback
-  - 大概率是召回没命中 + prompt 引导不够
+- [ ] **Bug 1: aggregator state 透传**（multi-agent 路径）
+  - 现象：`_gather_sub_results` return 了 sub_results，但 aggregator 收到空
+  - 已加 debug print（supervisor_graph.py），需 PyCharm 重启加载后定位
+  - 临时绕过：单 agent 模式不受影响（`use_multi_agent: false`）
 
 ### 中优先级
 - [ ] 调 Prompt 让 Pattern Bank 注入更有效（当前 86.7%，目标 90%+）
