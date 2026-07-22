@@ -159,7 +159,7 @@ const BACKEND_KEYWORD_MAP: Array<{ pattern: RegExp; error: FriendlyError }> = [
 export function mapHttpError(status: number): FriendlyError {
   return (
     HTTP_STATUS_MAP[status] ?? {
-      title: `请求失败（HTTP ${status}）`,
+      title: `请求失败（状态码 ${status}）`,
       detail: "问数服务返回错误状态码，请稍后重试或联系管理员。",
       toastType: "error",
       retryable: true,

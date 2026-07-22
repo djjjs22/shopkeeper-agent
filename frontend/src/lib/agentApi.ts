@@ -61,7 +61,7 @@ export async function streamQuery(query: string, options: QueryOptions) {
       // 读不到 body 也无所谓
     }
     throw new ApiError(
-      bodyText || `接口请求失败：HTTP ${response.status}`,
+      bodyText || `接口请求失败：状态码 ${response.status}`,
       response.status,
     );
   }
@@ -125,7 +125,7 @@ export async function clearSession() {
     headers: { Accept: "application/json", ...authHeaders() },
   });
   if (!response.ok) {
-    throw new ApiError(`清空会话失败：HTTP ${response.status}`, response.status);
+    throw new ApiError(`清空会话失败：状态码 ${response.status}`, response.status);
   }
   return response.json();
 }
