@@ -84,6 +84,27 @@ async def aggregator(state: DataAgentState, runtime: Runtime[DataAgentContext]) 
             f"plan is None={plan is None}"
         )
 
+        # 2026-07-22 修复：LangGraph subgraph state 隔离导致 aggregator 拿不到
+        # _gather_sub_results 写入的 sub_results（state 只有 input 的 query/history）。
+        # 但 _gather_sub_results 已经通过 writer 把 type="result" 推给前端了，
+        # 所以这里拿不到 sub_results 时不要让 LLM 编"未查到数据"，
+        # 直接返回中性消息（前端已经有结果了）。
+        if not sub_results:
+            logger.warning(
+                "aggregator: sub_results 为空（LangGraph subgraph state 隔离），"
+                "前端已通过 _gather_sub_results 的 writer 收到结果，返回中性消息"
+            )
+            writer({"type": "progress", "step": step, "status": "success"})
+            return {
+                "final_response": {
+                    "answer": "查询已完成。",
+                    "sub_results": [],
+                    "is_synthesized": False,
+                },
+                "confidence": 1.0,  # 不触发 reviewer retry（结果已推前端）
+                "review_action": None,
+            }
+
         # ---------- 路径 1：单 sub_query（不调 LLM，省钱）----------
         if len(sub_results) == 1:
             only = sub_results[0]

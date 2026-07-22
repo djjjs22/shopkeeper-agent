@@ -246,6 +246,23 @@ async def _gather_sub_results(state: MultiAgentState, runtime: Runtime[DataAgent
         f"ordered_rows_lens={[len(r.get('rows', [])) for r in ordered]}, "
         f"plan_id={id(plan)}, plan_sub_queries_len={len(plan.sub_queries) if plan else 'None'}"
     )
+    # 2026-07-22 修复：主动用 runtime.stream_writer 把结果推给前端
+    # 原因：subgraph 内部 run_sql 的 writer 不会冒泡到 supervisor_graph 的 astream，
+    # 导致前端收不到 type="result" 事件 → 前端显示"未查到数据"。
+    # 修法：_gather_sub_results 跑完所有 sub 后，主动推一次合并 result。
+    # 单 sub：直接推 rows（前端表格直接渲染）
+    # 多 sub：拼成 [{回复: ...}] 格式（aggregator 也会再处理，但这里先保证前端有数据）
+    writer = runtime.stream_writer
+    if len(ordered) == 1:
+        rows = ordered[0].get("rows", [])
+        writer({"type": "result", "data": rows})
+    elif len(ordered) > 1:
+        # 多 sub：简单拼接（详细合并由 aggregator 做，这里防丢）
+        all_rows = []
+        for r in ordered:
+            all_rows.extend(r.get("rows", []))
+        writer({"type": "result", "data": all_rows[:100]})  # 截断防前端爆
+
     # 保留共享前置结果到 state —— reviewer retry 时复用，避免再跑 16s
     # ⚠️ 2026-07-20 修复：MultiAgentState 字段没用 Annotated reducer，默认 LastValue OVERWRITE。
     # 节点返回 dict 时各 channel 独立更新，本节点之前写入的字段（plan / query / history）
