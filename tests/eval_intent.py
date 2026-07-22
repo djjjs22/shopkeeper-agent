@@ -74,6 +74,12 @@ INTENT_TEST_CASES = [
     ("有哪些维度", "metadata_query"),
     ("日期表有哪些字段", "metadata_query"),
 
+    # ── 边界 case：问指标定义 vs 查指标数值（最容易误判）──
+    ("什么是动销率", "metadata_query"),
+    ("动销率是什么意思", "metadata_query"),
+    ("复购率怎么算的", "metadata_query"),
+    ("GMV 是什么", "metadata_query"),
+
     # ── data_query（20 条）──
     ("华东销售额", "data_query"),
     ("各品类的销量", "data_query"),
@@ -90,10 +96,10 @@ INTENT_TEST_CASES = [
     ("月度 GMV 趋势", "data_query"),
     ("用户复购率", "data_query"),
     ("商品动销率", "data_query"),
+    ("动销率是多少", "data_query"),
     ("各支付方式的使用次数", "data_query"),
     ("统计每个会员等级的下单频次", "data_query"),
     ("2024 年全年 GMV", "data_query"),
-    ("TOP10 客户贡献了多少", "data_query"),
     ("上周的日均订单数", "data_query"),
 ]
 
