@@ -104,6 +104,17 @@ async def reviewer(state: DataAgentState, runtime: Runtime[DataAgentContext]) ->
             raw = raw.content
         confidence, action = _parse_review_decision(raw)
 
+        # 2026-07-22 飞轮升级：reviewer 低分 → 归集到 bad_case（fire-and-forget）
+        # 阈值 0.5（比 retry 阈值 0.7 更严，只记"明显不行"的，避免灌爆表）
+        if confidence < 0.5:
+            from app.services.bad_case_collector import bad_case_collector
+
+            bad_case_collector.record(
+                query=query, sql="",
+                error_type="review_low",
+                detail=f"confidence={confidence:.2f} answer={answer[:100]}",
+            )
+
         logger.info(
             f"reviewer: confidence={confidence:.2f} action={action} "
             f"loop={loop_count + 1}/{MAX_REVIEW_LOOP}"

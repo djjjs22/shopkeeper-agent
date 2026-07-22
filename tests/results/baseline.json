@@ -1,0 +1,206 @@
+{
+  "timestamp": "20260722_125117",
+  "total": 15,
+  "passed": 13,
+  "accuracy": 0.8666666666666667,
+  "by_difficulty": {
+    "单表": {
+      "total": 10,
+      "passed": 8
+    },
+    "多表 JOIN + 时间过滤": {
+      "total": 1,
+      "passed": 1
+    },
+    "多表 JOIN + 聚合": {
+      "total": 2,
+      "passed": 2
+    },
+    "多表 JOIN + 过滤": {
+      "total": 2,
+      "passed": 2
+    }
+  },
+  "details": [
+    {
+      "query": "全国有多少个客户",
+      "difficulty": "单表",
+      "expected_sql": "SELECT COUNT(DISTINCT customer_id) AS 客户总数 FROM dim_customer",
+      "generated_sql": "SELECT COUNT(DISTINCT dc.customer_id) AS 客户总数 FROM dim_customer dc",
+      "sql_match_score": 1.0,
+      "execution_match": true,
+      "exec_detail": null,
+      "elapsed_ms": 24632.115125656128,
+      "error": null,
+      "passed": true
+    },
+    {
+      "query": "商品的总数量",
+      "difficulty": "单表",
+      "expected_sql": "SELECT COUNT(DISTINCT product_id) AS 商品总数 FROM dim_product",
+      "generated_sql": "SELECT COUNT(DISTINCT fo.product_id) AS 商品总数 FROM fact_order fo",
+      "sql_match_score": 0.7,
+      "execution_match": true,
+      "exec_detail": null,
+      "elapsed_ms": 25222.166538238525,
+      "error": null,
+      "passed": true
+    },
+    {
+      "query": "列出所有的地区",
+      "difficulty": "单表",
+      "expected_sql": "SELECT DISTINCT region_name AS 地区 FROM dim_region",
+      "generated_sql": "SELECT DISTINCT region_name AS 地区 FROM dim_region",
+      "sql_match_score": 1.0,
+      "execution_match": true,
+      "exec_detail": null,
+      "elapsed_ms": 15138.946533203125,
+      "error": null,
+      "passed": true
+    },
+    {
+      "query": "有多少个会员等级",
+      "difficulty": "单表",
+      "expected_sql": "SELECT COUNT(DISTINCT member_level) AS 会员等级数 FROM dim_customer",
+      "generated_sql": "SELECT COUNT(DISTINCT dc.member_level) AS 会员等级数 FROM dim_customer dc",
+      "sql_match_score": 1.0,
+      "execution_match": true,
+      "exec_detail": null,
+      "elapsed_ms": 13601.45092010498,
+      "error": null,
+      "passed": true
+    },
+    {
+      "query": "商品都有哪些品类",
+      "difficulty": "单表",
+      "expected_sql": "SELECT DISTINCT category AS 品类 FROM dim_product",
+      "generated_sql": "SELECT DISTINCT category AS 品类 FROM dim_product",
+      "sql_match_score": 1.0,
+      "execution_match": true,
+      "exec_detail": null,
+      "elapsed_ms": 21912.543296813965,
+      "error": null,
+      "passed": true
+    },
+    {
+      "query": "总共有多少个订单",
+      "difficulty": "单表",
+      "expected_sql": "SELECT COUNT(order_id) AS 订单总数 FROM fact_order",
+      "generated_sql": "SELECT COUNT(fo.order_id) AS 订单总数 FROM fact_order fo",
+      "sql_match_score": 1.0,
+      "execution_match": true,
+      "exec_detail": null,
+      "elapsed_ms": 14649.29461479187,
+      "error": null,
+      "passed": true
+    },
+    {
+      "query": "最大的订单金额是多少",
+      "difficulty": "单表",
+      "expected_sql": "SELECT MAX(order_amount) AS 最大订单金额 FROM fact_order",
+      "generated_sql": "SELECT MAX(fo.order_amount) AS 最大订单金额 FROM fact_order fo",
+      "sql_match_score": 1.0,
+      "execution_match": true,
+      "exec_detail": null,
+      "elapsed_ms": 17171.437740325928,
+      "error": null,
+      "passed": true
+    },
+    {
+      "query": "订单金额的最小值",
+      "difficulty": "单表",
+      "expected_sql": "SELECT MIN(order_amount) AS 最小订单金额 FROM fact_order",
+      "generated_sql": "SELECT MIN(fo.order_amount) AS 最小订单金额 FROM fact_order fo",
+      "sql_match_score": 1.0,
+      "execution_match": true,
+      "exec_detail": null,
+      "elapsed_ms": 24101.576328277588,
+      "error": null,
+      "passed": true
+    },
+    {
+      "query": "订单平均金额",
+      "difficulty": "单表",
+      "expected_sql": "SELECT AVG(order_amount) AS 平均订单金额 FROM fact_order",
+      "generated_sql": "",
+      "sql_match_score": 0.0,
+      "execution_match": false,
+      "exec_detail": null,
+      "elapsed_ms": 7798.401355743408,
+      "error": null,
+      "passed": false
+    },
+    {
+      "query": "有哪些支付方式",
+      "difficulty": "单表",
+      "expected_sql": "SELECT DISTINCT payment_method AS 支付方式 FROM fact_order",
+      "generated_sql": "",
+      "sql_match_score": 0.0,
+      "execution_match": false,
+      "exec_detail": null,
+      "elapsed_ms": 7096.236228942871,
+      "error": null,
+      "passed": false
+    },
+    {
+      "query": "查一下华东上个月的销售额",
+      "difficulty": "多表 JOIN + 时间过滤",
+      "expected_sql": "SELECT SUM(fact_order.order_amount) AS 销售额\n                          FROM fact_order\n                          JOIN dim_region ON fact_order.region_id = dim_region.region_id\n                          WHERE dim_region.region_name = '华东'\n                            AND fact_order.date_id >= 20260601\n                            AND fact_order.date_id < 20260701",
+      "generated_sql": "SELECT SUM(fo.order_amount) AS 销售额 FROM fact_order fo INNER JOIN dim_region dr ON fo.region_id = dr.region_id WHERE (fo.date_id BETWEEN 20260601 AND 20260630) AND (dr.region_name = '华东') AND (fo.date_id BETWEEN 20260601 AND 20260630)",
+      "sql_match_score": 0.9333333333333332,
+      "execution_match": true,
+      "exec_detail": null,
+      "elapsed_ms": 29522.847890853882,
+      "error": "(pymysql.err.OperationalError) (1054, \"Unknown column 'fact_order.date_id' in 'where clause'\")\n[SQL: explain SELECT SUM(fo.order_amount) AS 销售额 FROM fact_order fo INNER JOIN dim_region dr ON fo.region_id = dr.region_id WHERE (fact_order.date_id BETWEEN 20260601 AND 20260630) AND (dr.region_name = '华东') AND (fo.date_id BETWEEN 20260601 AND 20260630)]\n(Background on this error at: https://sqlalche.me/e/20/e3q8)",
+      "passed": true
+    },
+    {
+      "query": "每个品类的销量是多少",
+      "difficulty": "多表 JOIN + 聚合",
+      "expected_sql": "SELECT dim_product.category AS 品类, SUM(fact_order.order_quantity) AS 销量\n                          FROM fact_order\n                          JOIN dim_product ON fact_order.product_id = dim_product.product_id\n                          GROUP BY dim_product.category",
+      "generated_sql": "SELECT dp.category AS 品类, SUM(fo.order_quantity) AS 销量 FROM fact_order fo INNER JOIN dim_product dp ON fo.product_id = dp.product_id GROUP BY dp.category",
+      "sql_match_score": 0.9,
+      "execution_match": true,
+      "exec_detail": null,
+      "elapsed_ms": 29976.00293159485,
+      "error": null,
+      "passed": true
+    },
+    {
+      "query": "黄金会员的订单总额",
+      "difficulty": "多表 JOIN + 过滤",
+      "expected_sql": "SELECT SUM(fact_order.order_amount) AS 订单总额\n                          FROM fact_order\n                          JOIN dim_customer ON fact_order.customer_id = dim_customer.customer_id\n                          WHERE dim_customer.member_level = '黄金'",
+      "generated_sql": "SELECT SUM(fo.order_amount) AS 订单总额 FROM fact_order fo INNER JOIN dim_customer dc ON fo.customer_id = dc.customer_id WHERE (dc.member_level = '黄金')",
+      "sql_match_score": 1.0,
+      "execution_match": true,
+      "exec_detail": null,
+      "elapsed_ms": 20177.953004837036,
+      "error": null,
+      "passed": true
+    },
+    {
+      "query": "手机品类的销售额",
+      "difficulty": "多表 JOIN + 过滤",
+      "expected_sql": "SELECT SUM(fact_order.order_amount) AS 销售额\n                          FROM fact_order\n                          JOIN dim_product ON fact_order.product_id = dim_product.product_id\n                          WHERE dim_product.category = '手机数码'",
+      "generated_sql": "SELECT SUM(fo.order_amount) AS 销售额 FROM fact_order fo INNER JOIN dim_product dp ON fo.product_id = dp.product_id WHERE (dp.category = '手机数码')",
+      "sql_match_score": 1.0,
+      "execution_match": true,
+      "exec_detail": null,
+      "elapsed_ms": 20829.086780548096,
+      "error": null,
+      "passed": true
+    },
+    {
+      "query": "各地区的客户数量",
+      "difficulty": "多表 JOIN + 聚合",
+      "expected_sql": "SELECT dim_region.region_name AS 地区, COUNT(DISTINCT fact_order.customer_id) AS 客户数\n                          FROM fact_order\n                          JOIN dim_region ON fact_order.region_id = dim_region.region_id\n                          GROUP BY dim_region.region_name",
+      "generated_sql": "SELECT dr.region_name AS 地区, COUNT(DISTINCT fo.customer_id) AS 客户数 FROM fact_order fo INNER JOIN dim_region dr ON fo.region_id = dr.region_id GROUP BY dr.region_name",
+      "sql_match_score": 0.9,
+      "execution_match": true,
+      "exec_detail": null,
+      "elapsed_ms": 24725.714445114136,
+      "error": null,
+      "passed": true
+    }
+  ]
+}

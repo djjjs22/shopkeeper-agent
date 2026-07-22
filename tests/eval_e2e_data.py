@@ -90,7 +90,8 @@ TEST_CASES_E2E = [
                           FROM fact_order
                           JOIN dim_region ON fact_order.region_id = dim_region.region_id
                           WHERE dim_region.region_name = '华东'
-                            AND fact_order.date_id >= 202606""",
+                            AND fact_order.date_id >= 20260601
+                            AND fact_order.date_id < 20260701""",
         "difficulty": "多表 JOIN + 时间过滤",
         "ground_truth_result": 12345678.90,
     },
@@ -187,14 +188,14 @@ TEST_CASES_E2E = [
         "query": "上个月的订单数",
         "expected_sql": """SELECT COUNT(*) AS 订单数
                           FROM fact_order
-                          WHERE date_id >= 202606""",
+                          WHERE date_id >= 20260601 AND date_id < 20260701""",
         "difficulty": "时间过滤",
     },
     {
         "query": "最近7天的销量",
         "expected_sql": """SELECT SUM(order_quantity) AS 销量
                           FROM fact_order
-                          WHERE date_id >= 20260704""",
+                          WHERE date_id >= 20260716 AND date_id <= 20260722""",
         "difficulty": "时间过滤",
     },
     {
@@ -218,7 +219,7 @@ TEST_CASES_E2E = [
         "query": "上周的日均订单数",
         "expected_sql": """SELECT COUNT(*) / 7 AS 日均订单数
                           FROM fact_order
-                          WHERE date_id >= 20260704""",
+                          WHERE date_id >= 20260709 AND date_id <= 20260715""",
         "difficulty": "时间过滤 + 聚合",
     },
     {
@@ -276,7 +277,7 @@ TEST_CASES_E2E = [
         "difficulty": "枚举值匹配",
     },
     {
-        "query": "电脑品类的销量",
+        "query": "家用电器品类的销量",
         "expected_sql": """SELECT SUM(fact_order.order_quantity) AS 销量
                           FROM fact_order
                           JOIN dim_product ON fact_order.product_id = dim_product.product_id
@@ -287,7 +288,7 @@ TEST_CASES_E2E = [
         "query": "微信支付的订单总额",
         "expected_sql": """SELECT SUM(order_amount) AS 订单总额
                           FROM fact_order
-                         """,
+                          WHERE payment_method = '微信'""",
         "difficulty": "枚举值匹配",
     },
     {
@@ -394,25 +395,11 @@ TEST_CASES_E2E = [
     },
 
     # ═══════════════════════════════════════════════════════════════
-    # 场景 6：多轮对话（5 条，测"上下文记忆"功能）
+    # 场景 6：多轮对话（4 条，测"上下文记忆"功能）
+    # 2026-07-22 修复：原第一条 case（query=查华东 + multi_turn 最后一条=那华南呢）
+    # 设计错误——query 与 multi_turn 末条不一致，导致 history 截尾后与 query 重复。
+    # 已删除，保留 4 条语义自洽的多轮 case（每条的 multi_turn 末条 == query）。
     # ═══════════════════════════════════════════════════════════════
-    {
-        "query": "查一下华东的销售额",
-        "expected_sql": """SELECT SUM(fact_order.order_amount) AS 销售额
-                          FROM fact_order
-                          JOIN dim_region ON fact_order.region_id = dim_region.region_id
-                          WHERE dim_region.region_name = '华东'""",
-        "difficulty": "多轮 - 单表",
-        "multi_turn": [
-            {"role": "user", "content": "查一下华东的销售额"},
-            {"role": "assistant", "content": "（已生成 SQL，返回结果 12345678.90）"},
-            {"role": "user", "content": "那华南呢"},
-        ],
-        "expected_sql_for_last": """SELECT SUM(fact_order.order_amount) AS 销售额
-                                    FROM fact_order
-                                    JOIN dim_region ON fact_order.region_id = dim_region.region_id
-                                    WHERE dim_region.region_name = '华南'""",
-    },
     {
         "query": "那华南呢",
         "expected_sql": """SELECT SUM(fact_order.order_amount) AS 销售额
@@ -421,6 +408,11 @@ TEST_CASES_E2E = [
                           WHERE dim_region.region_name = '华南'""",
         "difficulty": "多轮 - 上下文",
         "depends_on_prev": "查一下华东的销售额",
+        "multi_turn": [
+            {"role": "user", "content": "查一下华东的销售额"},
+            {"role": "assistant", "content": "（已生成 SQL，返回华东销售额 12345678.90）"},
+            {"role": "user", "content": "那华南呢"},
+        ],
     },
     {
         "query": "今年呢",
@@ -430,6 +422,11 @@ TEST_CASES_E2E = [
                           WHERE dim_date.year = YEAR(CURRENT_DATE)""",
         "difficulty": "多轮 - 时间补全",
         "depends_on_prev": "查一下华东的销售额",
+        "multi_turn": [
+            {"role": "user", "content": "查一下华东的销售额"},
+            {"role": "assistant", "content": "（已生成 SQL，返回华东销售额 12345678.90）"},
+            {"role": "user", "content": "今年呢"},
+        ],
     },
     {
         "query": "改成手机品类",
@@ -439,6 +436,11 @@ TEST_CASES_E2E = [
                           WHERE dim_product.category = '手机数码'""",
         "difficulty": "多轮 - 维度替换",
         "depends_on_prev": "查一下华东的销售额",
+        "multi_turn": [
+            {"role": "user", "content": "查一下华东的销售额"},
+            {"role": "assistant", "content": "（已生成 SQL，返回华东销售额 12345678.90）"},
+            {"role": "user", "content": "改成手机品类"},
+        ],
     },
     {
         "query": "只算黄金会员",
@@ -448,6 +450,141 @@ TEST_CASES_E2E = [
                           WHERE dim_customer.member_level = '黄金'""",
         "difficulty": "多轮 - 条件追加",
         "depends_on_prev": "查一下华东的销售额",
+        "multi_turn": [
+            {"role": "user", "content": "查一下华东的销售额"},
+            {"role": "assistant", "content": "（已生成 SQL，返回华东销售额 12345678.90）"},
+            {"role": "user", "content": "只算黄金会员"},
+        ],
+    },
+
+    # ═══════════════════════════════════════════════════════════════
+    # 场景 7：高级 SQL 形态（10 条，覆盖之前完全空白的场景）
+    # 这些是真正区分模型能力的题——同比/环比、HAVING、窗口函数、NULL、
+    # NOT IN、LIKE、UNION、同义指标、嵌套子查询、跨 3 轮指代
+    # ═══════════════════════════════════════════════════════════════
+    {
+        "query": "今年和去年同期的 GMV 对比",
+        "expected_sql": """SELECT dim_date.year AS 年份, SUM(fact_order.order_amount) AS GMV
+                          FROM fact_order
+                          JOIN dim_date ON fact_order.date_id = dim_date.date
+                          WHERE dim_date.year IN (YEAR(CURRENT_DATE), YEAR(CURRENT_DATE) - 1)
+                          GROUP BY dim_date.year
+                          ORDER BY dim_date.year""",
+        "difficulty": "同比对比",
+    },
+    {
+        "query": "本月相比上个月的销售额增长率",
+        "expected_sql": """SELECT
+                              cur.month_sales,
+                              prev.prev_month_sales,
+                              ROUND((cur.month_sales - prev.prev_month_sales) / prev.prev_month_sales * 100, 2) AS 增长率
+                          FROM (
+                              SELECT SUM(order_amount) AS month_sales
+                              FROM fact_order
+                              WHERE date_id >= 20260701 AND date_id < 20260801
+                          ) cur,
+                          (
+                              SELECT SUM(order_amount) AS prev_month_sales
+                              FROM fact_order
+                              WHERE date_id >= 20260601 AND date_id < 20260701
+                          ) prev""",
+        "difficulty": "环比计算",
+    },
+    {
+        "query": "哪些品类的销售额超过 100 万",
+        "expected_sql": """SELECT dim_product.category AS 品类, SUM(fact_order.order_amount) AS 销售额
+                          FROM fact_order
+                          JOIN dim_product ON fact_order.product_id = dim_product.product_id
+                          GROUP BY dim_product.category
+                          HAVING SUM(fact_order.order_amount) > 1000000
+                          ORDER BY 销售额 DESC""",
+        "difficulty": "HAVING 后聚合过滤",
+    },
+    {
+        "query": "每个地区销售额最高的客户",
+        "expected_sql": """SELECT region_name, customer_id, order_amount
+                          FROM (
+                              SELECT
+                                  dim_region.region_name AS region_name,
+                                  fact_order.customer_id AS customer_id,
+                                  SUM(fact_order.order_amount) AS order_amount,
+                                  ROW_NUMBER() OVER (
+                                      PARTITION BY dim_region.region_name
+                                      ORDER BY SUM(fact_order.order_amount) DESC
+                                  ) AS rn
+                              FROM fact_order
+                              JOIN dim_region ON fact_order.region_id = dim_region.region_id
+                              GROUP BY dim_region.region_name, fact_order.customer_id
+                          ) t
+                          WHERE rn = 1""",
+        "difficulty": "窗口函数 ROW_NUMBER",
+    },
+    {
+        "query": "没有填写支付方式的订单有多少",
+        "expected_sql": """SELECT COUNT(*) AS 未支付订单数
+                          FROM fact_order
+                          WHERE payment_method IS NULL OR payment_method = ''""",
+        "difficulty": "NULL 处理",
+    },
+    {
+        "query": "华南和华东以外的地区销售额",
+        "expected_sql": """SELECT dim_region.region_name AS 地区, SUM(fact_order.order_amount) AS 销售额
+                          FROM fact_order
+                          JOIN dim_region ON fact_order.region_id = dim_region.region_id
+                          WHERE dim_region.region_name NOT IN ('华南', '华东')
+                          GROUP BY dim_region.region_name""",
+        "difficulty": "NOT IN 负向条件",
+    },
+    {
+        "query": "商品名带无线两个字的销量",
+        "expected_sql": """SELECT SUM(fact_order.order_quantity) AS 销量
+                          FROM fact_order
+                          JOIN dim_product ON fact_order.product_id = dim_product.product_id
+                          WHERE dim_product.product_name LIKE '%无线%'""",
+        "difficulty": "LIKE 模糊匹配",
+    },
+    {
+        "query": "黄金会员和普通会员的销售额合计",
+        "expected_sql": """SELECT '黄金' AS 会员类型, SUM(order_amount) AS 销售额
+                          FROM fact_order
+                          JOIN dim_customer ON fact_order.customer_id = dim_customer.customer_id
+                          WHERE dim_customer.member_level = '黄金'
+                          UNION ALL
+                          SELECT '普通' AS 会员类型, SUM(order_amount) AS 销售额
+                          FROM fact_order
+                          JOIN dim_customer ON fact_order.customer_id = dim_customer.customer_id
+                          WHERE dim_customer.member_level = '普通'""",
+        "difficulty": "UNION ALL 合并",
+    },
+    {
+        "query": "营业额最高的地区是哪个",
+        "expected_sql": """SELECT dim_region.region_name AS 地区, SUM(fact_order.order_amount) AS 营业额
+                          FROM fact_order
+                          JOIN dim_region ON fact_order.region_id = dim_region.region_id
+                          GROUP BY dim_region.region_name
+                          ORDER BY 营业额 DESC
+                          LIMIT 1""",
+        "difficulty": "同义指标（营业额=GMV=SUM(order_amount)）",
+    },
+    {
+        "query": "那它的销量呢",
+        "expected_sql": """SELECT SUM(fact_order.order_quantity) AS 销量
+                          FROM fact_order
+                          JOIN dim_region ON fact_order.region_id = dim_region.region_id
+                          WHERE dim_region.region_name = (
+                              SELECT dim_region.region_name
+                              FROM fact_order
+                              JOIN dim_region ON fact_order.region_id = dim_region.region_id
+                              GROUP BY dim_region.region_name
+                              ORDER BY SUM(fact_order.order_amount) DESC
+                              LIMIT 1
+                          )""",
+        "difficulty": "跨 3 轮指代消解 + 嵌套子查询",
+        "multi_turn": [
+            {"role": "user", "content": "营业额最高的地区是哪个"},
+            {"role": "assistant", "content": "（已生成 SQL，返回营业额最高的地区是华东）"},
+            {"role": "user", "content": "那它的销量呢"},
+        ],
     },
 ]
 
@@ -460,7 +597,18 @@ EVAL_CONFIG = {
         "业务指标": 1.5,
         "复杂业务指标": 2.0,
         "多轮 - 上下文": 2.0,
+        # 2026-07-22 场景 7 新增的高级形态，权重更高
+        "同比对比": 2.0,
+        "环比计算": 2.5,
+        "HAVING 后聚合过滤": 2.0,
+        "窗口函数 ROW_NUMBER": 2.5,
+        "NULL 处理": 1.5,
+        "NOT IN 负向条件": 1.5,
+        "LIKE 模糊匹配": 1.5,
+        "UNION ALL 合并": 2.0,
+        "同义指标（营业额=GMV=SUM(order_amount)）": 2.0,
+        "跨 3 轮指代消解 + 嵌套子查询": 2.5,
     },
-    "sql_match_threshold": 0.8,  # SQL 相似度阈值（0-1）
-    "result_match_threshold": 0.95,  # 结果集相似度阈值
+    "sql_match_threshold": 0.8,  # SQL 相似度阈值（execution match 不可用时 fallback 到这个）
+    # result_match_threshold 已废弃——execution match 是 bool，不再需要阈值
 }

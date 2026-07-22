@@ -1,0 +1,109 @@
+# NL2SQL 回归门禁 CI（2026-07-22 Phase 6）
+#
+# PR 提交到 main 时触发：
+#   1. 跑 eval_e2e（端到端 SQL 生成准确率）
+#   2. 对比 baseline.json
+#   3. 准确率下降 > 2% → 阻断合并
+#
+# 依赖：需要 DB/Redis/Qdrant/ES/LLM 的连接信息（从 GitHub Secrets 注入）
+# 本地模拟：DB_PORT=3307 uv run python -m tests.eval_e2e && python tests/scripts/compare_to_baseline.py
+
+name: NL2SQL 回归门禁
+
+on:
+  pull_request:
+    branches: [main]
+  # 支持手动触发（调试用）
+  workflow_dispatch:
+
+jobs:
+  eval-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      # CI 里起一套依赖容器（mysql/redis/qdrant/es/embedding）
+      # 生产环境可换成远程服务（通过 secrets 注入连接串）
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          MYSQL_DATABASE: meta
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports: ["6333:6333"]
+
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: "false"
+        ports: ["9200:9200"]
+
+    env:
+      DB_PORT: "3306"
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      REDIS_URL: redis://localhost:6379/0
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_CHEAP_MODEL_NAME: ${{ secrets.LLM_CHEAP_MODEL_NAME }}
+      LLM_CHEAP_BASE_URL: ${{ secrets.LLM_CHEAP_BASE_URL }}
+      LLM_CHEAP_API_KEY: ${{ secrets.LLM_CHEAP_API_KEY }}
+      LLM_STRONG_MODEL_NAME: ${{ secrets.LLM_STRONG_MODEL_NAME }}
+      LLM_STRONG_BASE_URL: ${{ secrets.LLM_STRONG_BASE_URL }}
+      LLM_STRONG_API_KEY: ${{ secrets.LLM_STRONG_API_KEY }}
+      ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Wait for services
+        run: |
+          # 给 mysql/es 启动时间（health check 已覆盖大部分，这里兜底）
+          sleep 10
+
+      - name: Init upgrade tables
+        run: uv run python -m app.scripts.init_upgrade_tables
+
+      - name: Build pattern bank
+        run: uv run python -m app.scripts.build_pattern_bank
+        continue-on-error: true  # embedding 服务可能没起，不阻断
+
+      - name: Run eval_e2e
+        run: uv run python -m tests.eval_e2e
+
+      - name: Compare to baseline
+        run: uv run python tests/scripts/compare_to_baseline.py --threshold 0.02
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: tests/results/

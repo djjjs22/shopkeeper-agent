@@ -16,16 +16,16 @@ db_meta:
   # - Mac 端 Docker MySQL 在 3307 端口 → 不设（默认 3307）
   # 这样同一份代码同时适配两台机器，无需切换 yaml
   port: ${oc.env:DB_PORT,3307}
-  user: didilili
+  user: root
   # 明文密码已移除，改为从 .env 读取（见 .env.example）
-  password: ${oc.env:DB_PASSWORD,dili123}
+  password: ${oc.env:DB_PASSWORD,123456}
   database: meta
 
 db_dw:
   host: localhost
   port: ${oc.env:DB_PORT,3307}
-  user: didilili
-  password: ${oc.env:DB_PASSWORD,dili123}
+  user: root
+  password: ${oc.env:DB_PASSWORD,123456}
   database: dw
 
 qdrant:
@@ -121,6 +121,9 @@ node_profiles:
   planner: strong
   aggregator: strong
   reviewer: strong
+  # 2026-07-22 Episodic Memory：会话摘要节点
+  # 摘要任务简单（压缩对话），用 cheap 省 token（~1s vs strong ~3s）
+  summarizer: cheap
 
 redis_cfg:
   url: ${oc.env:REDIS_URL,redis://127.0.0.1:6379/0}

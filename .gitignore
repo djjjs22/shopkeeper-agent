@@ -30,8 +30,13 @@ wheels/
 chrome-profiler-events*.json
 speed-measure-plugin*.json
 
-# Test artifacts (2026-07-13 新增：评测结果 JSON 不上传)
+# Test artifacts (2026-07-13 新增：评测结果 JSON 不上传）
 tests/results/
+# 2026-07-22 例外：baseline.json 要进 repo（CI 门禁对比用）
+!tests/results/baseline.json
+
+# 2026-07-22：ZCode agent 本地工作文件不提交
+.zcode/
 
 # IDEs and editors
 /.idea

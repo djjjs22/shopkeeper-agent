@@ -61,3 +61,24 @@ class QuerySchema(BaseModel):
                     "检测到可疑指令注入，已拒绝。请用自然语言描述你想查询的数据。"
                 )
         return v
+
+
+class FeedbackSchema(BaseModel):
+    """`/api/query/feedback` 请求体（2026-07-22 飞轮升级）
+
+    用户对查询结果的反馈——👎 是数据飞轮最准的失败信号（人工标注），
+    比改问/短停留等启发式信号可靠得多。
+    """
+
+    query: str = Field(max_length=500, description="被反馈的查询文本")
+    rating: str = Field(description="反馈类型：up（有用）/ down（没用）")
+    sql: str | None = Field(default=None, max_length=5000, description="可选：相关 SQL")
+    comment: str | None = Field(default=None, max_length=500, description="可选：反馈备注")
+    session_id: str | None = Field(default=None, description="可选：会话 ID（用于关联）")
+
+    @field_validator("rating")
+    @classmethod
+    def _validate_rating(cls, v: str) -> str:
+        if v not in ("up", "down"):
+            raise ValueError("rating 只能是 'up' 或 'down'")
+        return v

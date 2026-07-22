@@ -94,8 +94,20 @@ class LLMRegistry:
             max_tokens=max_tokens,
         )
         # with_config 返回新实例，不影响原 base
+        # 2026-07-22 LangSmith 升级：metadata 多带一个 langsmith 标签字段，
+        # 让 trace UI 能按 profile 筛选（cheap vs strong 调用对比）
         return base.with_config(
-            {"callbacks": [LLMTimingCallback()], "metadata": {"profile": profile_name}}
+            {
+                "callbacks": [LLMTimingCallback()],
+                "metadata": {
+                    "profile": profile_name,
+                    # LangSmith 会把这些 key 作为可筛标签展示在 trace UI
+                    "langsmith_metadata": {
+                        "component": "llm",
+                        "profile": profile_name,
+                    },
+                },
+            }
         )
 
     def get(self, profile: str) -> BaseChatModel:

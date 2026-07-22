@@ -126,6 +126,12 @@ class DataAgentState(TypedDict):
     metric_infos: list[MetricInfoState]  # 合并后的指标上下文
     date_info: DateInfoState  # 当前日期 星期和季度信息
     db_info: DBInfoState  # 数据库方言和版本信息
+    # 2026-07-22 Procedural Memory：从 Pattern Bank 召回的 top-k SQL 模板，
+    # 作为 few-shot 注入 generate_intent prompt。空列表 = 无命中，走原流程。
+    sql_patterns: list  # [{"query_intent_text", "sql_template", "confidence", "source", "tags"}]
+    # 2026-07-22 Semantic Memory：用户长期偏好（按地区维度、常用术语等），
+    # 注入 generate_intent prompt 作为默认上下文。空 = 无偏好，走原流程。
+    user_preferences: list  # [{"preference_type", "content", "confidence"}]
 
     sql: str  # 生成或校正后的SQL
 

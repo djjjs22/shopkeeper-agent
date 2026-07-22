@@ -122,12 +122,14 @@ async def _memory_add(session_id: str, role: str, content: str) -> None:
     """
     async with _memory_lock:
         # LRU 淘汰：session 已存在则不算新增；新 session 且超限时，淘汰最旧的
-        # Python 3.7+ dict 保插入顺序，popitem(last=False) 弹最早的
+        # Python 3.7+ dict 保插入顺序，next(iter(dict)) 拿最早的 key 再 pop
+        # （注：dict.popitem() 在 3.7+ 不接受 last 参数，那是 OrderedDict 的语法）
         if (
             session_id not in _memory_fallback
             and len(_memory_fallback) >= redis_cfg.max_memory_sessions
         ):
-            oldest_id, _ = _memory_fallback.popitem(last=False)
+            oldest_id = next(iter(_memory_fallback))
+            _memory_fallback.pop(oldest_id)
             logger.debug(
                 f"[session_store] 内存 dict 达上限 {redis_cfg.max_memory_sessions}，"
                 f"淘汰最旧 session: {oldest_id}"

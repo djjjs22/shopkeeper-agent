@@ -5,9 +5,11 @@ services:
     restart: unless-stopped
     environment:
       TZ: Asia/Shanghai
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-dili123}
-      MYSQL_USER: didilili
-      MYSQL_PASSWORD: ${DB_PASSWORD:-dili123}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-123456}
+      # 2026-07-22：统一用 root，不再单独建业务用户（原 didilili）
+      # 留 MYSQL_USER/PASSWORD 给需要业务/管理分离的部署场景，当前注释掉
+      # MYSQL_USER: didilili
+      # MYSQL_PASSWORD: ${DB_PASSWORD:-123456}
     ports:
       - "3307:3306"
     volumes:

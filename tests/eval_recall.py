@@ -1,235 +1,195 @@
 """
-召回率评估脚本
+召回率评估脚本（2026-07-22 Phase 5 重写：接真实三路召回）
 
-指标定义：
-  Recall（召回率）= 召回命中数 / 标准答案总数
-    例：标准答案 3 个字段，召回了其中 2 个 → Recall = 2/3 = 66.7%
-  Precision（准确率）= 召回命中数 / 实际召回数
-    例：实际召回了 5 个字段，其中 2 个是标准答案 → Precision = 2/5 = 40%
+改前：用 mock_recall 假数据，从未接真实召回链路 → 数字无意义
+改后：直接调 ColumnQdrantRepository / MetricQdrantRepository / ValueESRepository，
+      用 jieba 抽关键词 + embedding 召回，跑 eval_data.py 的 20 条 gold
+
+指标：
+  - table_recall:    召回命中表数 / 期望表数
+  - column_recall:   召回命中字段数 / 期望字段数（hit-rate@k）
+  - metric_recall:   召回命中指标数 / 期望指标数
+  - MRR（Mean Reciprocal Rank）：第一个命中结果的平均排名倒数
 
 运行方式：
-  cd D:\shopkeeper-agent-main
-  python tests/eval_recall.py
+  cd D:/shopkeeper-agent
+  DB_PORT=3307 uv run python -m tests.eval_recall
+
+注意：需要 Qdrant + Embedding + ES 全部在线（docker compose up）
 """
+
+import asyncio
+from collections import defaultdict
+
+import jieba
+
+from app.clients.embedding_client_manager import embedding_client_manager
+from app.clients.es_client_manager import es_client_manager
+from app.clients.qdrant_client_manager import qdrant_client_manager
+from app.repositories.es.value_es_repository import ValueESRepository
+from app.repositories.qdrant.column_qdrant_repository import ColumnQdrantRepository
+from app.repositories.qdrant.metric_qdrant_repository import MetricQdrantRepository
 from tests.eval_data import TEST_CASES
 
+# 初始化 client（评测进程共用一份）
+qdrant_client_manager.init()
+embedding_client_manager.init()
+es_client_manager.init()
 
-def evaluate_one_case(case:dict)  -> dict:
+
+def _extract_keywords(query: str) -> list[str]:
+    """用 jieba 抽关键词（轻量版，不走 LLM 扩展，纯分词）"""
+    words = jieba.cut_for_search(query)
+    # 过滤单字 + 停用词（粗糙版，够评测用）
+    stop = {"的", "了", "是", "在", "有", "多少", "查", "看", "一下", "统计", "请问"}
+    return [w for w in words if len(w) >= 2 and w not in stop]
+
+
+async def real_recall(query: str) -> tuple[list[str], list[str], list[str]]:
+    """调真实三路召回，返回 (tables, columns, metrics)
+
+    不走完整 graph（避免 LLM 依赖），直接用 jieba 关键词 + embedding 检索
     """
-       评估单条用例的召回质量
+    keywords = _extract_keywords(query)
+    if not keywords:
+        keywords = [query]  # 兜底：整句当关键词
 
-       参数：
-           case: 测试用例字典，含 query / expected_tables / expected_columns / expected_metrics
+    column_repo = ColumnQdrantRepository(qdrant_client_manager.client)
+    metric_repo = MetricQdrantRepository(qdrant_client_manager.client)
+    value_repo = ValueESRepository(es_client_manager.client)
 
-       返回：
-           评估结果字典：
-           {
-               "query": 原始问题,
-               "table_recall": 表召回率,
-               "column_recall": 字段召回率,
-               "metric_recall": 指标召回率,
-               "hit_columns": 命中的字段列表,
-               "missed_columns": 漏召回的字段列表,
-           }
-       """
-    # TODO 1：调用你项目里的 recall 节点，得到实际召回结果
-    # actual_tables, actual_columns, actual_metrics = mock_recall(case["query"])
-    actual_tables,actual_columns,actual_metrics = mock_recall(case["query"])
-    # TODO 2：计算表召回率
-    #table_recall = len(set(actual_tables) & set(case["expected_tables"])) / len(case["expected_tables"])
-    table_recall = len(set(actual_tables) & set(case["expected_tables"])) / len(case["expected_tables"])
-    # TODO 3：计算字段召回率
-    column_recall = len(set(actual_columns) & set(case["expected_columns"])) / len(case["expected_columns"])
-    # 在 column_recall 下面加一行
-    # 指标召回率（.get 是因为有些用例可能没有 expected_metrics）
-    expected_metrics = case.get("expected_metrics", [])
-    if expected_metrics:
-        metric_recall = len(set(actual_metrics) & set(expected_metrics)) / len(
-            expected_metrics)
-    else:
-        metric_recall = 1.0  # 没要求召回到指标 → 默认 100%
+    # 并行三路召回
+    async def _recall_columns():
+        results = []
+        seen = set()
+        for kw in keywords:
+            try:
+                emb = await embedding_client_manager.client.aembed_query(kw)
+                cols = await column_repo.search(emb)
+                for c in cols:
+                    if c.id not in seen:
+                        seen.add(c.id)
+                        results.append(c)
+            except Exception:
+                pass
+        return results
 
-    # TODO 4：找出漏召回的字段
-    missed_columns = set(case["expected_columns"]) - set(actual_columns)
-    #命中的字段
-    hit_columns = list(set(actual_columns) & set(case["expected_columns"]))
-    # TODO 5：组装返回结果
-    # 把这一行替换掉
+    async def _recall_metrics():
+        results = []
+        seen = set()
+        for kw in keywords:
+            try:
+                emb = await embedding_client_manager.client.aembed_query(kw)
+                ms = await metric_repo.search(emb)
+                for m in ms:
+                    mid = getattr(m, "id", None) or getattr(m, "name", str(m))
+                    if mid not in seen:
+                        seen.add(mid)
+                        results.append(m)
+            except Exception:
+                pass
+        return results
+
+    async def _recall_values():
+        try:
+            return await value_repo.search(query, top_k=10)
+        except Exception:
+            return []
+
+    cols, metrics, values = await asyncio.gather(
+        _recall_columns(), _recall_metrics(), _recall_values()
+    )
+
+    # 提取表名 + 字段名（格式：table.column）
+    tables = set()
+    columns = set()
+    for c in cols:
+        if c.table_id:
+            tables.add(c.table_id.split(".")[0] if "." in c.table_id else c.table_id)
+        if c.name and c.table_id:
+            tname = c.table_id.split(".")[0] if "." in c.table_id else c.table_id
+            columns.add(f"{tname}.{c.name}")
+
+    metric_names = set()
+    for m in metrics:
+        name = getattr(m, "name", None) or str(m)
+        metric_names.add(name)
+
+    return list(tables), list(columns), list(metric_names)
+
+
+def evaluate_one_case(case: dict, actual_tables, actual_columns, actual_metrics) -> dict:
+    """评估单条用例的召回质量"""
+    expected_tables = set(case.get("expected_tables", []))
+    expected_columns = set(case.get("expected_columns", []))
+    expected_metrics = set(case.get("expected_metrics", []))
+
+    table_recall = (
+        len(expected_tables & set(actual_tables)) / len(expected_tables)
+        if expected_tables else 1.0
+    )
+    column_recall = (
+        len(expected_columns & set(actual_columns)) / len(expected_columns)
+        if expected_columns else 1.0
+    )
+    metric_recall = (
+        len(expected_metrics & set(actual_metrics)) / len(expected_metrics)
+        if expected_metrics else 1.0
+    )
+
     return {
         "query": case["query"],
         "table_recall": table_recall,
         "column_recall": column_recall,
         "metric_recall": metric_recall,
-        "hit_columns": hit_columns,
-        "missed_columns": missed_columns,
+        "hit_columns": list(expected_columns & set(actual_columns)),
+        "missed_columns": list(expected_columns - set(actual_columns)),
+        "actual_columns_count": len(actual_columns),
     }
 
-def evaluate_all_cases() -> dict:
-    # 步骤 1：循环调用 evaluate_one_case
+
+async def evaluate_all_cases() -> dict:
     results = []
-    for case in TEST_CASES:
-        result = evaluate_one_case(case)
+    for i, case in enumerate(TEST_CASES):
+        print(f"[{i+1}/{len(TEST_CASES)}] {case['query'][:30]}...", end=" ")
+        actual_tables, actual_columns, actual_metrics = await real_recall(case["query"])
+        result = evaluate_one_case(case, actual_tables, actual_columns, actual_metrics)
         results.append(result)
-    # 步骤 2：把每条结果存到列表
-    column_recalls = [r["column_recall"] for r in results]
-    # 步骤 3：算平均召回率
-    avg_table_recall = sum(r["table_recall"] for r in results) / len(results)
-    avg_column_recall = sum(r["column_recall"] for r in results) / len(results)
-    avg_metric_recall = sum(r["metric_recall"] for r in results) / len(results)
-    # 步骤 4：找召回率最低的 3 个用例
-    worst_cases = sorted(results, key=lambda x: x["column_recall"])[:3]
-    # 步骤 5：组装汇总字典返回
+        print(f"col_recall={result['column_recall']:.1%}")
+
+    avg_table = sum(r["table_recall"] for r in results) / len(results)
+    avg_col = sum(r["column_recall"] for r in results) / len(results)
+    avg_metric = sum(r["metric_recall"] for r in results) / len(results)
+    worst = sorted(results, key=lambda x: x["column_recall"])[:5]
+
     return {
-            "total_cases": len(results),
-            "avg_table_recall": avg_table_recall,
-            "avg_column_recall": avg_column_recall,
-            "avg_metric_recall": avg_metric_recall,
-            "worst_cases": worst_cases,
-        }
-
-
-def mock_recall(query: str):
-    """
-    模拟召回结果
-
-    返回：(tables, columns, metrics) 三个列表的元组
-    """
-    mock_data = {
-        # ── 场景 1：简单单表（5 条全部完全命中）──
-        "全国有多少个客户": {
-            "tables": ["dim_customer"],
-            "columns": ["dim_customer.customer_id"],
-            "metrics": [],
-        },
-        "商品的总数量": {
-            "tables": ["dim_product"],
-            "columns": ["dim_product.product_id"],
-            "metrics": [],
-        },
-        "列出所有的地区": {
-            "tables": ["dim_region"],
-            "columns": ["dim_region.region_name"],
-            "metrics": [],
-        },
-        "有多少个会员等级": {
-            "tables": ["dim_customer"],
-            "columns": ["dim_customer.member_level"],
-            "metrics": [],
-        },
-        "商品都有哪些品类": {
-            "tables": ["dim_product"],
-            "columns": ["dim_product.category_name"],
-            "metrics": [],
-        },
-
-        # ── 场景 2：JOIN 多表（5 条）──
-        "查一下华东上个月的销售额": {
-            "tables": ["fact_order", "dim_region"],  # ✅ 完全命中
-            "columns": ["fact_order.order_amount", "dim_region.region_name"],
-            "metrics": ["GMV"],
-        },
-        "每个品类的销量是多少": {
-            "tables": ["fact_order", "dim_product"],
-            "columns": ["fact_order.order_quantity"],  # ⚠️ 漏召 dim_product.category_name
-            "metrics": [],
-        },
-        "钻石会员的订单总额": {
-            "tables": ["fact_order", "dim_customer"],
-            "columns": ["fact_order.order_amount", "dim_customer.member_level"],
-            "metrics": [],
-        },
-        "手机品类的销售额": {
-            "tables": ["fact_order", "dim_product", "fact_order"],
-            # ⚠️ 多召了无关的 fact_order
-            "columns": ["fact_order.order_amount", "dim_product.category_name"],
-            "metrics": [],
-        },
-        "各地区的客户数量": {
-            "tables": ["dim_customer", "dim_region"],
-            "columns": ["dim_customer.customer_id", "dim_region.region_name"],
-            "metrics": [],
-        },
-
-        # ── 场景 3：含时间过滤（4 条）──
-        "2025年第一季度的总销售额": {
-            "tables": ["fact_order", "dim_date"],
-            "columns": ["fact_order.order_amount", "dim_date.date"],
-            "metrics": ["GMV"],
-        },
-        "上个月的订单数": {
-            "tables": ["fact_order", "dim_date"],
-            "columns": ["fact_order.order_id", "dim_date.date"],
-            "metrics": [],
-        },
-        "最近7天的销量": {
-            "tables": ["fact_order"],  # ⚠️ 漏召 dim_date
-            "columns": ["fact_order.order_quantity"],
-            "metrics": [],
-        },
-        "2024年全年GMV": {
-            "tables": ["fact_order", "dim_date"],
-            "columns": ["fact_order.order_amount", "dim_date.date"],
-            "metrics": ["GMV"],
-        },
-
-        # ── 场景 4：枚举值（3 条）──
-        "华北的销售额": {
-            "tables": ["fact_order", "dim_region"],
-            "columns": ["fact_order.order_amount", "dim_region.region_name"],
-            "metrics": [],
-        },
-        "金牌会员的订单": {
-            "tables": ["fact_order", "dim_customer"],
-            "columns": ["fact_order.order_id", "dim_customer.member_level"],
-            "metrics": [],
-        },
-        "电脑品类的销量": {
-            "tables": ["fact_order", "dim_product"],
-            "columns": ["fact_order.order_quantity", "dim_product.category_name"],
-            "metrics": [],
-        },
-
-        # ── 场景 5：业务指标（3 条）──
-        "统计每个地区的GMV": {
-            "tables": ["fact_order", "dim_region"],
-            "columns": ["fact_order.order_amount", "dim_region.region_name"],
-            "metrics": ["GMV"],
-        },
-        "各品类的总销售额": {
-            "tables": ["fact_order", "dim_product"],
-            "columns": ["fact_order.order_amount", "dim_product.category_name"],
-            "metrics": ["GMV"],
-        },
-        "客单价是多少": {
-            "tables": ["fact_order"],
-            "columns": ["fact_order.order_amount", "fact_order.order_id"],
-            "metrics": ["客单价"],
-        },
+        "total_cases": len(results),
+        "avg_table_recall": avg_table,
+        "avg_column_recall": avg_col,
+        "avg_metric_recall": avg_metric,
+        "worst_cases": worst,
     }
 
-    # 防御：万一 query 不在 mock_data 里，返回空集
-    if query not in mock_data:
-        return [], [], []
 
-    # 返回三个列表
-    data = mock_data[query]
-    return data["tables"], data["columns"], data["metrics"]
-
-
-if __name__ == "__main__":
+async def main():
     print("=" * 60)
-    print("召回率评估报告")
+    print("召回率评估报告（真实三路召回，2026-07-22 重写）")
     print("=" * 60)
 
-    summary = evaluate_all_cases()
+    summary = await evaluate_all_cases()
 
-    print(f"📊 总用例数：{summary['total_cases']}")
+    print(f"\n📊 总用例数：{summary['total_cases']}")
     print(f"📈 平均表召回率：{summary['avg_table_recall']:.1%}")
     print(f"📈 平均字段召回率：{summary['avg_column_recall']:.1%}")
     print(f"📈 平均指标召回率：{summary['avg_metric_recall']:.1%}")
 
-    print("\n🔍 召回率最低的 3 个用例：")
+    print("\n🔍 召回率最低的 5 个用例：")
     for case in summary["worst_cases"]:
         print(f"  - {case['query']}")
-        print(f"    字段召回率: {case['column_recall']:.1%}")
-        print(f"    漏召字段: {case['missed_columns']}")
+        print(f"    字段召回率: {case['column_recall']:.1%} (实际召回 {case['actual_columns_count']} 个)")
+        if case["missed_columns"]:
+            print(f"    漏召字段: {case['missed_columns']}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -105,6 +105,14 @@ async def correct_sql(state: DataAgentState, runtime: Runtime[DataAgentContext])
             logger.error(
                 f"{step}: LLM 未返回 SQL，输出前 200 字符：{str(result)[:200]!r}"
             )
+            # 2026-07-22 飞轮升级：LLM 放弃治疗 → 归集到 bad_case
+            from app.services.bad_case_collector import bad_case_collector
+
+            bad_case_collector.record(
+                query=query, sql=sql,
+                error_type="sql_fail",
+                detail=f"correct_sql LLM 未返回 SQL: {str(result)[:200]}",
+            )
             raise ValueError(
                 f"correct_sql 节点 LLM 未返回 SQL（输出：{str(result)[:100]}...）"
             )

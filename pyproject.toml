@@ -17,6 +17,7 @@ dependencies = [
     "langchain-deepseek>=1.0.1",
     "langchain-huggingface>=1.2.1",
     "langgraph>=1.1.6",
+    "langsmith>=0.1.0",
     "loguru>=0.7.3",
     "omegaconf>=2.3.0",
     "python-dotenv>=1.2.2",
@@ -32,6 +33,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.11.0",
+    "sqlglot>=23.0.0",
 ]
 
 [tool.ruff]

@@ -119,8 +119,19 @@ def start_scheduler() -> None:
         coalesce=True,  # 错过多次时合并成一次（见"知识点 3"）
         max_instances=1,  # 同一时刻只能跑一个实例（见"知识点 4"）
     )
+    # 2026-07-22 Memory 衰减任务：每天 03:00 跑（在归档 02:00 之后）
+    # 遗忘机制——污染的 memory 比没有 memory 更糟（见 memory_decay_service docstring）
+    _scheduler.add_job(
+        _safe_memory_decay,
+        trigger=CronTrigger(hour=3, minute=0),
+        id="memory_decay",
+        name="Memory 衰减（SQL Pattern 降权归档 + User Profile 清理）",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
     _scheduler.start()
-    logger.info("[scheduler] 启动成功，归档任务已注册（每天 02:00）")
+    logger.info("[scheduler] 启动成功，已注册：归档(02:00) + Memory 衰减(03:00)")
 
 
 def stop_scheduler() -> None:
@@ -151,3 +162,18 @@ async def _safe_archive() -> None:
     except Exception as e:
         # 已经记录过具体错误，这里只记一行
         logger.error(f"[scheduler] 归档任务异常: {e}")
+
+
+async def _safe_memory_decay() -> None:
+    """Memory 衰减任务包装（2026-07-22 Phase 5）
+
+    每天 03:00 跑：SQL Pattern 降权归档 + User Profile 清理低置信。
+    异常隔离同 _safe_archive。
+    """
+    try:
+        from app.services.memory_decay_service import memory_decay_service
+
+        stats = await memory_decay_service.decay_all()
+        logger.info(f"[scheduler] Memory 衰减完成: {stats}")
+    except Exception as e:
+        logger.error(f"[scheduler] Memory 衰减任务异常: {e}")

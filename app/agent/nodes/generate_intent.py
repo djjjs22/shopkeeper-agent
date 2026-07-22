@@ -105,6 +105,60 @@ def _format_business_rules_for_prompt(query: str) -> str:
     return "无"
 
 
+def _format_sql_patterns_for_prompt(patterns: list[dict] | None) -> str:
+    """把召回的 SQL 模板格式化成 few-shot 字符串（Procedural Memory 注入）
+
+    2026-07-22 Procedural Memory：从 Pattern Bank 召回 top-k 历史成功 SQL，
+    作为 few-shot 示例注入 prompt。LLM 看到相似问题的正确写法后，能更稳定地
+    产出结构化 intent。
+
+    设计：
+    - 空 patterns → 返回 "无"（不影响原流程）
+    - 非空 → 每条格式化成"用户问题 + SQL 模板（占位符形式）"
+    - 模板里的 <value>/<date>/<number> 占位符告诉 LLM "这里该填具体值"
+
+    Args:
+        patterns: pattern_bank_service.retrieve_topk() 返回的列表
+
+    Returns:
+        格式化后的 few-shot 文本
+    """
+    if not patterns:
+        return "无"
+    lines = []
+    for i, p in enumerate(patterns, 1):
+        query_text = p.get("query_intent_text", "")
+        template = p.get("sql_template", "")
+        source = p.get("source", "")
+        tags = p.get("tags", [])
+        tag_str = f" [{','.join(tags)}]" if tags else ""
+        lines.append(
+            f"【历史成功示例 {i}】（来源: {source}{tag_str}）\n"
+            f"相似问题：{query_text}\n"
+            f"正确 SQL 写法（占位符需替换为实际值）：\n{template}\n"
+        )
+    return "\n".join(lines)
+
+
+def _format_user_preferences_for_prompt(preferences: list) -> str:
+    """把用户偏好格式化成 prompt 文本（Semantic Memory 注入）
+
+    2026-07-22 Semantic Memory：从 user_profile 读用户长期偏好，
+    作为默认上下文注入 prompt。
+
+    Args:
+        preferences: UserProfile entity 列表（已过滤 confidence ≥ 阈值）
+
+    Returns:
+        格式化文本；空则返回 "无"
+    """
+    if not preferences:
+        return "无"
+    from app.services.user_profile_service import _format_preferences_for_prompt
+
+    return _format_preferences_for_prompt(preferences)
+
+
 # ─────────────────────────────────────────────────────────────────────
 # 节点主体
 # ─────────────────────────────────────────────────────────────────────
@@ -138,6 +192,39 @@ async def generate_intent(state: DataAgentState, runtime: Runtime[DataAgentConte
         # P2 改造：根据 query 匹配业务规则（已付款/华北/黄金会员等）
         business_rules = _format_business_rules_for_prompt(query)
 
+        # 2026-07-22 Procedural Memory：召回 top-k 历史成功 SQL 模板做 few-shot
+        # 设计：节点内部主动召回（不依赖前置节点填 state.sql_patterns），
+        #       这样对 graph 拓扑零侵入——不改 graph.py 也能用。
+        #       召回失败/无命中 → patterns 为空，走原流程（fail-open）
+        sql_patterns = []
+        try:
+            from app.services.pattern_bank_service import pattern_bank_service
+
+            sql_patterns = await pattern_bank_service.retrieve_topk(query)
+        except Exception as e:
+            logger.warning(f"{step}: Pattern Bank 召回失败，走原流程: {e}")
+            sql_patterns = []
+        sql_patterns_text = _format_sql_patterns_for_prompt(sql_patterns)
+
+        # 2026-07-22 Semantic Memory：召回用户长期偏好（按地区维度、常用术语）
+        # 用 session_id 作为 user_id（项目无独立用户体系，session 即用户）
+        # 偏好置信度 < 0.9 不注入（保守，避免误判污染）
+        user_preferences = []
+        session_id = state.get("session_id")
+        if session_id:
+            try:
+                from app.services.user_profile_service import (
+                    user_profile_service,
+                )
+
+                user_preferences = await user_profile_service.get_active_preferences(
+                    session_id
+                )
+            except Exception as e:
+                logger.warning(f"{step}: 用户偏好读取失败，走原流程: {e}")
+                user_preferences = []
+        user_preferences_text = _format_user_preferences_for_prompt(user_preferences)
+
         # 构造 prompt
         # 2026-07-17 改造：f-string → jinja2
         # 动机：get_format_instructions() 拼接的 JSON Schema 含嵌套 {...{...}...}，
@@ -155,6 +242,8 @@ async def generate_intent(state: DataAgentState, runtime: Runtime[DataAgentConte
                 "time_range",
                 "inherited_context",
                 "business_rules",  # P2 新增
+                "sql_patterns",  # 2026-07-22 Procedural Memory few-shot
+                "user_preferences",  # 2026-07-22 Semantic Memory
                 "query",
             ],
         )
@@ -173,6 +262,8 @@ async def generate_intent(state: DataAgentState, runtime: Runtime[DataAgentConte
                     "time_range": _format_time_range_for_prompt(time_range),
                     "inherited_context": _format_inherited_for_prompt(inherited),
                     "business_rules": business_rules,  # P2 新增
+                    "sql_patterns": sql_patterns_text,  # 2026-07-22 Procedural Memory few-shot
+                    "user_preferences": user_preferences_text,  # 2026-07-22 Semantic Memory
                     "query": query,
                 }),
                 label=f"{step}:LLM+Pydantic 解析",

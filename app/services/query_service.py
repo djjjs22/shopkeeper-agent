@@ -31,6 +31,12 @@ from app.repositories.qdrant.column_qdrant_repository import ColumnQdrantReposit
 from app.repositories.qdrant.metric_qdrant_repository import MetricQdrantRepository
 from app.services.session_store import add_message, get_history
 
+# 2026-07-22 飞轮升级：查询日志服务（成功信号源，供 Pattern Bank 消费）
+from app.services.query_log_service import query_log_service
+# 2026-07-22 Semantic + Episodic Memory：用户偏好抽取 + 会话摘要
+from app.services.user_profile_service import user_profile_service
+from app.services.session_summarizer import session_summarizer
+
 # ─────────────────────────────────────────────────────────────────────
 # 错误脱敏（2026-07-20 #1）：给前端的友好文案，避免泄露 SQL/表结构
 # ─────────────────────────────────────────────────────────────────────
@@ -106,6 +112,9 @@ class QueryService:
         )
         try:
             last_result = None
+            # 2026-07-22 飞轮升级：记录端到端延迟
+            import time as _time
+            _start_ts = _time.monotonic()
             # supervisor_graph 节点数少，progress 事件也更稀疏（planner / aggregator / reviewer 三个）
             async for chunk in supervisor_graph.astream(
                 input=state, context=context, stream_mode="custom"
@@ -114,6 +123,13 @@ class QueryService:
                     last_result = chunk.get("data")
                 yield f"data: {json.dumps(chunk, ensure_ascii=False, default=str)}\n\n"
 
+            # 2026-07-22 飞轮升级：multi-agent 路径也记 query_log（reviewer_score 可后续从 trace 补）
+            _elapsed_ms = (_time.monotonic() - _start_ts) * 1000
+            query_log_service.record(
+                session_id=session_id, query=query, sql="",
+                success=last_result is not None, latency_ms=_elapsed_ms,
+            )
+
             if last_result is not None:
                 # ⭐ 2026-07-20 优化：两次 add_message 并行（同 query() 路径）
                 result_text = str(last_result)[:200]
@@ -121,10 +137,17 @@ class QueryService:
                     add_message(session_id, "user", query),
                     add_message(session_id, "assistant", result_text),
                 )
+                # 2026-07-22 Semantic + Episodic Memory（同 query() 路径）
+                await user_profile_service.update(session_id, query)
+                await session_summarizer.summarize_if_needed(session_id)
 
         except Exception as e:
             # 2026-07-20（#1 脱敏）：服务端记完整异常，给前端友好文案
             logger.exception(f"[query_multi_agent] 链路异常: {e}")
+            query_log_service.record(
+                session_id=session_id, query=query, sql="",
+                success=False, latency_ms=(_time.monotonic() - _start_ts) * 1000,
+            )
             error = {"type": "error", "message": _friendly_error(e)}
             yield f"data: {json.dumps(error, ensure_ascii=False, default=str)}\n\n"
 
@@ -155,6 +178,9 @@ class QueryService:
         try:
             # 记录最后生成的结果数据（用于回写到 session_store）
             last_result = None
+            # 2026-07-22 飞轮升级：记录端到端延迟（供 query_log + p95 统计）
+            import time as _time
+            _start_ts = _time.monotonic()
             # stream_mode="custom" 对应节点内部 writer(...) 写出的进度消息
             async for chunk in graph.astream(
                 input=state, context=context, stream_mode="custom"
@@ -165,6 +191,14 @@ class QueryService:
                 # SSE 要求每条消息以 data: 开头，并以两个换行符结束
                 # ensure_ascii=False 保留中文进度文案，default=str 兜底处理日期等非 JSON 类型
                 yield f"data: {json.dumps(chunk, ensure_ascii=False, default=str)}\n\n"
+
+            # 2026-07-22 飞轮升级：记录查询日志（fire-and-forget，不阻塞响应）
+            # sql 字段为空——graph 内部 state 不外泄，主要价值是 session/query/success/latency
+            _elapsed_ms = (_time.monotonic() - _start_ts) * 1000
+            query_log_service.record(
+                session_id=session_id, query=query, sql="",
+                success=last_result is not None, latency_ms=_elapsed_ms,
+            )
 
             # ⭐ L1 存：把本轮对话写回 session_store
             # 只有成功拿到结果才记录（失败的不污染历史）
@@ -178,10 +212,20 @@ class QueryService:
                     add_message(session_id, "user", query),
                     add_message(session_id, "assistant", result_text),
                 )
+                # 2026-07-22 Semantic Memory：抽取用户偏好（fire-and-forget）
+                # 连续 3 次带"按地区" → preferred_dim=region confidence=0.9
+                await user_profile_service.update(session_id, query)
+                # 2026-07-22 Episodic Memory：历史超 5 轮触发摘要（防 token 爆炸）
+                await session_summarizer.summarize_if_needed(session_id)
 
         except Exception as e:
             # 流式接口已经开始返回后不能再改 HTTP 状态码，因此把异常也包装成一条 SSE 消息
             # 2026-07-20（#1 脱敏）：服务端记完整异常，给前端友好文案
             logger.exception(f"[query] 链路异常: {e}")
+            # 2026-07-22 飞轮升级：异常也算一次失败查询，记 query_log
+            query_log_service.record(
+                session_id=session_id, query=query, sql="",
+                success=False, latency_ms=(_time.monotonic() - _start_ts) * 1000,
+            )
             error = {"type": "error", "message": _friendly_error(e)}
             yield f"data: {json.dumps(error, ensure_ascii=False, default=str)}\n\n"

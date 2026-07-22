@@ -281,7 +281,7 @@ def to_sql_value(v) -> str:
 out = StringIO()
 out.write("SET NAMES utf8mb4;\n\n")
 out.write("CREATE DATABASE IF NOT EXISTS dw DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;\n")
-out.write("GRANT ALL PRIVILEGES ON dw.* TO 'didilili'@'%';\n")
+out.write("GRANT ALL PRIVILEGES ON dw.* TO 'root'@'%';\n")
 out.write("USE dw;\n\n")
 
 # ----- dim_region -----

@@ -149,6 +149,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         _log.warning("[SKIP] 调度器启动失败: %s", e)
 
+    # 2026-07-22 Eval+可观测性升级：LangSmith tracing 状态日志
+    # 不做任何强制——env 设了 LangChain 自动 trace（覆盖 17 节点 + multi-agent 子图），
+    # 不设则完全跳过，零侵入。这里只是启动时打一行让运维知道当前状态。
+    try:
+        import os
+
+        tracing_on = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
+        if tracing_on:
+            project = os.getenv("LANGCHAIN_PROJECT", "shopkeeper-agent")
+            _log.info(
+                "[OK] LangSmith tracing 已启用（project=%s，17 节点 + multi-agent 自动上报）",
+                project,
+            )
+        else:
+            _log.info("[INFO] LangSmith tracing 未启用（设 LANGCHAIN_TRACING_V2=true 开启）")
+    except Exception as e:
+        _log.warning("[SKIP] LangSmith 状态检查失败: %s", e)
+
     yield  # ← 应用运行中
 
     # 关闭阶段（见"知识点 4"）

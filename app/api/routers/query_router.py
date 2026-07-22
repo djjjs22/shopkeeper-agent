@@ -18,10 +18,11 @@ from fastapi import APIRouter, Body, Cookie, Depends, Header, HTTPException
 from starlette.responses import StreamingResponse
 
 from app.api.dependencies import get_query_service
-from app.api.schemas.query_schema import QuerySchema
+from app.api.schemas.query_schema import QuerySchema, FeedbackSchema
 from app.core.session import issue_session_id, verify_session_id
 from app.services.query_service import QueryService
 from app.services.session_store import clear_history
+from app.services.bad_case_collector import bad_case_collector
 
 # 当前模块只维护查询相关接口，避免后续所有 API 都挤在 main.py 中
 query_router = APIRouter()
@@ -105,3 +106,30 @@ async def clear_session_handler(
         return {"status": "ok", "cleared": False, "reason": "no_valid_session"}
     await clear_history(session_id)
     return {"status": "ok", "cleared": True}
+
+
+@query_router.post("/api/query/feedback")
+async def feedback_handler(
+    body: Annotated[FeedbackSchema, Body()],
+    authorization: Annotated[str | None, Header()] = None,
+):
+    """接收用户对查询结果的反馈（2026-07-22 飞轮升级）
+
+    👎 是数据飞轮最准的失败信号（人工标注），自动归集到 bad_case 表，
+    周期 review 后进 gold_dataset 驱动 prompt / recall 优化。
+
+    不需要 session_id 鉴权——反馈是用户主动行为，宽松接收。
+    """
+    _check_query_api_key(authorization)
+
+    # 👎 → 归集到 bad_case（fire-and-forget，不阻塞响应）
+    if body.rating == "down":
+        bad_case_collector.record(
+            query=body.query,
+            sql=body.sql or "",
+            error_type="user_thumb_down",
+            detail=body.comment,
+            session_id=body.session_id,
+        )
+
+    return {"status": "ok", "rating": body.rating, "recorded": body.rating == "down"}

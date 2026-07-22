@@ -38,6 +38,13 @@ async def validate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
         except Exception as e:
             # 不抛出异常中断图执行，而是把错误写入状态，供条件分支进入 correct_sql
             logger.info(f"SQL语法错误：{str(e)}")
+            # 2026-07-22 飞轮升级：explain 失败 → 归集到 bad_case 表（fire-and-forget）
+            from app.services.bad_case_collector import bad_case_collector
+
+            bad_case_collector.record(
+                query=state["query"], sql=sql,
+                error_type="sql_fail", detail=str(e),
+            )
             writer({"type": "progress", "step": step, "status": "success"})
             return {"error": str(e)}
 
