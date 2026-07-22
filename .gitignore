@@ -72,6 +72,7 @@ docker/embedding/
 
 # WorkBuddy agent data (local only)
 .workbuddy/
+.learnings/
 
 # Runtime logs
 logs/
@@ -83,4 +84,5 @@ docs.zip
 .obsidian/
 skills.zip
 COMMIT_MSG.md
+实习经历.md
 docker/mysql/dw.sql.bak-*

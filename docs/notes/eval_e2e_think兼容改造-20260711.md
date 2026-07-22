@@ -67,7 +67,7 @@ Error code: 401 - {'type': 'error', 'error': {
 
 **根因**：`.env` 里的 `LLM_API_KEY=sk-tXap0Cck...` 失效了。
 
-**解决**：藤子给新 key `sk-cp-cSWY65HF-jB_AuIK3LxVUy086Ag4g_h5hE0ZrgJarD-320pLWfSApS5oLJnsr6QP23OrNYzsaGSahTQiFV5b8-oapoXKgZ5T04Xrcw55EYYzBp4bJ_8ZmCM`（模型 MiniMax-M3），覆盖 `.env` 文件。
+**解决**：更新 `.env` 中的 `LLM_API_KEY`（模型 MiniMax-M3）。密钥仅保存在本地环境变量中，不写入文档或 Git。
 
 **注意**：换 key 后还要重启评测进程（LLM 客户端在进程启动时读 .env）。
 
@@ -279,7 +279,7 @@ output_parser = StripThinkStrParser()
 
 跑评测时：
 ```bash
-cd /Users/lunasama/Downloads/Agent/shopkeeper-agent
+cd /path/to/shopkeeper-agent
 .venv/bin/python -m tests.eval_e2e
 # 结果在 tests/results/eval_e2e_<时间>.json
 ```

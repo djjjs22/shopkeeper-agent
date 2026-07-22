@@ -1,0 +1,39 @@
+[
+  {
+    "note_id": "n1",
+    "type": "normal",
+    "title": "字节 AI 应用开发 面经",
+    "desc": "一面问了 MCP 和 Skill 的区别。",
+    "time": 1758326400000,
+    "note_url": "https://www.xiaohongshu.com/explore/n1",
+    "image_list": ["https://sns-img.xhs.cn/n1_a.jpg", "https://sns-img.xhs.cn/n1_b.jpg"],
+    "tag_list": "面经,实习",
+    "liked_count": "1.2万",
+    "comments": [{"text": "mark"}]
+  },
+  {
+    "note_id": "n2",
+    "title": "RAG 八股",
+    "desc": "讲讲检索优化。",
+    "time": 0,
+    "image_list": "https://sns-img.xhs.cn/n2_a.jpg,https://sns-img.xhs.cn/n2_b.jpg,"
+  },
+  {
+    "note_id": "n3",
+    "title": "无 URL 但有 id",
+    "desc": "",
+    "time": 1700000000000,
+    "image_list": []
+  },
+  {
+    "title": "无 id 无 url,应被跳过",
+    "desc": "garbage",
+    "time": 1700000000000,
+    "image_list": []
+  },
+  {
+    "note_id": "n5",
+    "time": "not-a-number",
+    "image_list": null
+  }
+]

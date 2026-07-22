@@ -1,0 +1,21 @@
+[
+  {
+    "note_id": "n1",
+    "note_url": "https://www.xiaohongshu.com/explore/n1",
+    "title": "字节 AI 应用开发 面经",
+    "desc": "一面问了 MCP 和 Skill 的区别，还有 agent 项目细节。",
+    "time": 1758326400000,
+    "image_list": [
+      "https://sns-img.xhs.cn/n1_a.jpg",
+      "https://sns-img.xhs.cn/n1_b.jpg"
+    ]
+  },
+  {
+    "note_id": "n2",
+    "note_url": "https://www.xiaohongshu.com/explore/n2",
+    "title": "无日期帖",
+    "desc": "RAG 检索优化怎么答。",
+    "time": 0,
+    "image_list": ["https://sns-img.xhs.cn/n2_a.jpg"]
+  }
+]
