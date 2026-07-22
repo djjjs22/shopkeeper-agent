@@ -501,3 +501,153 @@ docker exec mysql mysqldump -uroot -p123456 meta > backup_meta.sql
 # 查 Pattern Bank 数据
 docker exec mysql mysql -uroot -p123456 -e "SELECT source, COUNT(*) FROM meta.sql_pattern GROUP BY source"
 ```
+
+---
+
+# 第二轮：线上 bug 修复 + eval 可信度改造（2026-07-22 下午）
+
+> 第一轮建好了 Memory + Eval + 飞轮框架，但用户上线测试发现"各种崩"——
+> eval 绿灯通过但线上查询失败。这一轮是"打脸 + 补课"：修了 6 个真实 bug，
+> 重做 eval 标准让它不再假绿。
+
+## 触发事件
+
+用户线上测试连续失败：
+1. "统计 2025 年第一季度各大区的 GMV" → "未查到数据"
+2. "商品动销率" → 被分类成 metadata_query → 空结果
+3. "华东2025年2月的环比增长率" → SELECT 1 fallback
+
+用户质问："**eval_e2e_data.py 测试就可以通过，为什么我上线就各种问题？你的测试标准到底怎么定义的？**"
+
+## 6 个 bug 的根因 + 修复（按发现顺序）
+
+### Bug 1：order_date 别名冲突（预存，commit 6f1967c 引入）
+
+**现象**：带时间条件的查询报 `Unknown column 'fact_order.date_id'`
+
+**根因**：`generate_intent.py:315` 硬编码 `fact_order.date_id`，但 SQL 用了别名 `fo`（`FROM fact_order fo`），MySQL 不允许别名后用原表名引用。
+
+**修复**：从 `intent["from"]` 解析别名，用 `fo.date_id` 而非 `fact_order.date_id`。
+
+**验证**：`2025年第一季度的总销售额` → 279159.5 ✓
+
+### Bug 2：think 块未闭合（最关键，影响所有派生指标）
+
+**现象**：环比/动销率/复购率等复杂查询 → SELECT 1 fallback
+
+**根因**：MiniMax-M3 遇到派生指标会输出超长 `<think>` 推理，有时：
+- think 块未闭合（只有 `<think>` 没有 `</think>`）→ `safe_parse_json._strip_think` 的正则 `<think>.*?</think>` 匹配不到
+- think 太长撞满 max_tokens=2000 → JSON 被截断
+
+**修复（三管齐下）**：
+1. `safe_json_parser.py` 加 `_THINK_UNCLOSED` 正则（`<think>.*` 剥未闭合块）
+2. `generate_intent.prompt` 开头加"⛔ 严禁输出 think 块"
+3. `conf/app_config.yaml` strong profile max_tokens 2000→4000
+
+**验证**：
+- 华东2025年2月环比 → -0.681 ✓
+- 商品动销率 → 30% ✓（JOIN dim_product 正确）
+
+### Bug 3：classify_intent 误判 XX率（cheap 模型理解力不足）
+
+**现象**："商品动销率"被判成 metadata_query → 走短路返回空
+
+**根因**：classify_intent 用 cheap 模型（M2.7），对"XX率"这种边界 case 判断不稳。
+
+**修复**：
+1. admin API hot swap：`classify_intent: cheap → strong`
+2. yaml 配置改 strong
+3. prompt 精确规则：含"是什么/什么是/怎么算"判 metadata，其他含指标名判 data_query
+
+**用户反馈纠正**：初版规则"含指标名一律 data_query"会把"什么是动销率"误判。
+修正：看意图动词（是什么/怎么算 = 问定义 = metadata），不看词。
+
+**验证**：7 个边界 case 全对（什么是动销率→metadata，商品动销率→data）
+
+### Bug 4：动销率 gold SQL 语义错（eval 假绿灯）
+
+**现象**：动销率永远返回 100%
+
+**根因**：`COUNT(DISTINCT product_id) FROM fact_order` 永远 = 分母（fact_order 只有下单商品）。
+正确：JOIN dim_product 拿全量商品做分母。
+
+**修复**：`eval_e2e_data.py` 改 gold SQL JOIN dim_product。
+
+**暴露的 eval 问题**：两个错 SQL 互相匹配 = execution match 通过 = 假绿灯。
+
+### Bug 5：aggregator 结果丢失（multi-agent 完全不可用）⭐⭐⭐
+
+**现象**：multi-agent 模式任何查询都返回"未查到数据"
+
+**根因（双重）**：
+1. **subgraph writer 不冒泡**：`_gather_sub_results` 内部 `post_subgraph.astream` 收集了 result，但 `run_sql` 节点的 `writer({"type": "result"})` 不会冒泡到 supervisor_graph 的 astream → 前端收不到结果
+2. **LangGraph state 隔离**：aggregator 读 `state.sub_results` 为空（state 只有 input 的 query/history），`_gather_sub_results` 的 return 没合并进 aggregator 执行时的 state → aggregator 走 LLM 路径编"未查到数据"
+
+**修复（双管齐下）**：
+1. `_gather_sub_results` 跑完所有 sub 后，主动用 `runtime.stream_writer` 推 result（单 sub 推 rows，多 sub 推拼接）—— 绕过 subgraph writer 不冒泡
+2. aggregator 拿到空 sub_results 时，不调 LLM，直接返回中性消息 + confidence=1.0（不让 reviewer retry）—— 绕过 state 隔离
+
+**验证**：supervisor_graph 直接跑"华东销售额"，writer 推出 `[{销售额: 24494205}]` ✓
+
+**⚠️ 需要 PyCharm 重启**：supervisor_graph 是模块级编译的，reload 不重新编译 graph。
+
+### Bug 6：eval 标准本身不可信（用户的核心质问）
+
+**用户原话**："你的测试标准到底是怎么定义的？绿灯通过的标准是什么"
+
+**旧标准的问题**：
+1. AST fallback 太宽（结构像就给分，漏 DISTINCT/错枚举值都判对）
+2. 只测单 agent 路径，multi-agent 零覆盖
+3. gold SQL 本身可能错（两个错 SQL 互相匹配 = 假绿灯）
+4. 数据集是手工挑的"标准问法"，不是线上真实分布
+5. SELECT 1 fallback 被当正常结果
+
+**修复（eval 改造）**：
+1. **删 AST fallback**：passed 唯一标准 = execution match（结果集相等），失败就 fail
+2. **加 EVAL_MODE**（single/multi/both）：both 时每条 case 跑两条路径
+3. **SELECT 1 fallback 直接判 fail**
+4. 输出"single 过但 multi 挂"的 case（暴露 multi-agent bug）
+
+**验证**：5 条 single 跑通，准确率从假 86.7% → **真实 80%**
+**新发现的 bug**：LLM 漏 DISTINCT（"列出所有的地区"生成 `SELECT region_name` 缺 DISTINCT）
+
+## 数据库密码统一（root/123456）
+
+改了 6 个配置文件（app_config.yaml / .env / .env.example / docker-compose / gen_dw_sql / seed_data），
+MySQL 容器内 `ALTER USER 'root'@'%' IDENTIFIED BY '123456'` + GRANT meta/dw 权限。
+旧用户 didilili 恢复（dili123 密码），避免连接池缓存旧凭据导致连接失败。
+
+## Redis 启用
+
+`.env` 加 `SESSION_WRITE_MODE=dual_write`（内存 + Redis 双写验证期）。
+验证：add_message + get_history 正常读写 Redis。
+
+## 第二轮 commit 清单
+
+```
+4ddc582 fix: multi-agent aggregator 结果丢失——双重根因修复
+6aed0d4 fix: eval 改造——删 AST 假绿 fallback + 加 multi-agent 路径覆盖
+96404e1 fix: classify_intent 精确区分'问定义'vs'查数值'
+ccc3ab7 fix: generate_intent 加禁止 think 指令 + max_tokens 2000→4000
+f2e045c docs: 更新笔记记录 think 块修复
+b4ff75f fix: 修复 3 个导致查询失败的 bug（order_date/classify/gold SQL）
+```
+
+## 关键教训
+
+1. **eval 绿灯 ≠ 系统可用**：eval 测的是"SQL 生成器正确率"，不是"用户问一句话能不能得到答案"。两者差一个完整链路（multi-agent 聚合 / reviewer / 前端 SSE）。
+
+2. **think 块是 MiniMax-M3 的最大坑**：派生指标（环比/动销率）会触发超长推理，要么未闭合要么撞 max_tokens。必须双重防护（剥未闭合 + prompt 禁止 + max_tokens 加大）。
+
+3. **LangGraph subgraph state 隔离是深坑**：subgraph 的 writer 不冒泡、state 不合并到外层。绕过办法：外层节点主动用 runtime.stream_writer 推结果。
+
+4. **cheap 模型省 token 但误判多**：classify_intent 用 M2.7 对边界 case 不稳，改 strong 后稳定。省 token 不能牺牲准确率。
+
+5. **用户反馈是最好的 eval**：用户的"什么是动销率"纠正了我过度粗暴的分类规则。真实分布比手工数据集有价值。
+
+## 待办（第二轮新增）
+
+- [ ] **PyCharm 重启 uvicorn** 让 aggregator 修复 + max_tokens 4000 生效
+- [ ] **重跑 eval 生成新 baseline**（旧 baseline 86.7% 是假绿，新标准下应该 ~80%）
+- [ ] **multi-agent 派生 sub 失败**（环比第 3 个 sub 算比值还是 SELECT 1 fallback）—— generate_intent 不会表达"引用前序 sub 结果"，需架构层改造
+- [ ] **LLM 漏 DISTINCT**：prompt 加规则"查询枚举值/列表时必须 DISTINCT"
