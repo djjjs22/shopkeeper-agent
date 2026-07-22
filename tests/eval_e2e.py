@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.agent.graph import graph as agent_graph, DataAgentContext, DataAgentState
+from app.agent.supervisor_graph import supervisor_graph
 from app.clients.embedding_client_manager import embedding_client_manager
 from app.clients.es_client_manager import es_client_manager
 from app.clients.mysql_client_manager import (
@@ -49,8 +50,61 @@ meta_mysql_client_manager.init()
 dw_mysql_client_manager.init()
 
 
-async def run_one_case(graph, case: dict) -> dict:
-    """跑一条 query，返回评测结果"""
+async def _run_one_path(graph, query, history, session_id, expected_sql, context_factory):
+    """跑单条路径（single 或 multi），返回 (generated_sql, execution_match, elapsed_ms, error)
+
+    context_factory: 返回 DataAgentContext 的工厂（每次新建 session）
+    2026-07-22 重构：抽出公共逻辑，让 single/multi 两条路径复用
+    """
+    start = time.time()
+    try:
+        context = await context_factory()
+        result = await graph.ainvoke(
+            input={"query": query, "history": history, "session_id": session_id},
+            context=context,
+        )
+        elapsed_ms = (time.time() - start) * 1000
+
+        # 单 agent：result["sql"]；multi-agent：result["final_sql"] 或 sub_results 里的 sql
+        generated_sql = result.get("sql", "") or result.get("final_sql", "")
+        # multi-agent 路径：从 sub_results 里拼出最终 sql（aggregator 合并后可能没单 sql 字段）
+        if not generated_sql and result.get("sub_results"):
+            sqls = [sr.get("sql", "") for sr in result["sub_results"] if sr.get("sql")]
+            generated_sql = " ;\n".join(sqls) if sqls else ""
+
+        error = result.get("error", None)
+
+        # Execution match：gold + generated 都跑 DB 比对结果集
+        # 2026-07-22 修正：删掉 AST fallback——DB 不可用直接判 fail，不假绿
+        execution_match = None
+        try:
+            from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
+            async with dw_mysql_client_manager.session_factory() as dw_session:
+                dw_repo = DWMySQLRepository(dw_session)
+                gold_rows, _ = await dw_repo.run(expected_sql)
+                if generated_sql and not generated_sql.strip().upper().startswith("SELECT 1"):
+                    gen_rows, _ = await dw_repo.run(generated_sql)
+                    execution_match = compare_results(gold_rows, gen_rows)
+                else:
+                    execution_match = False  # generated 是 SELECT 1 fallback → 直接判错
+        except Exception as e:
+            # DB 不可用 / SQL 执行报错 → 判 fail（不再 fallback 到 AST 假绿）
+            error = f"execution match 失败: {e}"
+            execution_match = False
+
+        return generated_sql, execution_match, elapsed_ms, error
+    except Exception as e:
+        return "", False, (time.time() - start) * 1000, f"Agent 异常: {e}"
+
+
+async def run_one_case(graph, case: dict, use_multi_agent: bool = False) -> dict:
+    """跑一条 query，返回评测结果
+
+    2026-07-22 重构：
+    - 支持 single/multi 两条路径（EVAL_MODE 控制）
+    - 删掉 AST fallback：execution match 失败直接判 fail（不假绿）
+    - passed = execution_match is True（唯一标准，不再有 0.8 阈值兜底）
+    """
     query = case["query"]
     expected_sql = case["expected_sql"]
     difficulty = case.get("difficulty", "未知")
@@ -58,96 +112,101 @@ async def run_one_case(graph, case: dict) -> dict:
     # 多轮 case 处理：把历史喂进去
     history = case.get("multi_turn", [])
     if history:
-        # 截掉最后一个 user message（就是要评测的）
         history = history[:-1]
 
-    start = time.time()
-    try:
-        # 每次新建 context（里面有 SQLAlchemy session，要新连接）
+    session_id = f"eval-{case.get('id', 'unknown')}-{'multi' if use_multi_agent else 'single'}"
+
+    # context 工厂（每次新建 session，避免跨 case 状态泄漏）
+    async def context_factory():
+        from app.agent.context import DataAgentContext
         async with (
             meta_mysql_client_manager.session_factory() as meta_session,
             dw_mysql_client_manager.session_factory() as dw_session,
         ):
-            meta_mysql_repository = MetaMySQLRepository(meta_session)
-            dw_mysql_repository = DWMySQLRepository(dw_session)
-            column_qdrant_repository = ColumnQdrantRepository(qdrant_client_manager.client)
-            metric_qdrant_repository = MetricQdrantRepository(qdrant_client_manager.client)
-            value_es_repository = ValueESRepository(es_client_manager.client)
-
-            context = DataAgentContext(
-                column_qdrant_repository=column_qdrant_repository,
+            return DataAgentContext(
+                column_qdrant_repository=ColumnQdrantRepository(qdrant_client_manager.client),
                 embedding_client=embedding_client_manager.client,
-                metric_qdrant_repository=metric_qdrant_repository,
-                value_es_repository=value_es_repository,
-                meta_mysql_repository=meta_mysql_repository,
-                dw_mysql_repository=dw_mysql_repository,
+                metric_qdrant_repository=MetricQdrantRepository(qdrant_client_manager.client),
+                value_es_repository=ValueESRepository(es_client_manager.client),
+                meta_mysql_repository=MetaMySQLRepository(meta_session),
+                dw_mysql_repository=DWMySQLRepository(dw_session),
             )
 
-            result = await agent_graph.ainvoke(
-                input={
-                    "query": query,
-                    "history": history,
-                    "session_id": f"eval-{case.get('id', 'unknown')}",
-                },
+    # ⚠ context_factory 返回的是 async with 块里的对象，出了 with 块 session 就关了
+    # 改成直接在 _run_one_path 里建 context
+    from app.agent.context import DataAgentContext
+
+    async with (
+        meta_mysql_client_manager.session_factory() as meta_session,
+        dw_mysql_client_manager.session_factory() as dw_session,
+    ):
+        context = DataAgentContext(
+            column_qdrant_repository=ColumnQdrantRepository(qdrant_client_manager.client),
+            embedding_client=embedding_client_manager.client,
+            metric_qdrant_repository=MetricQdrantRepository(qdrant_client_manager.client),
+            value_es_repository=ValueESRepository(es_client_manager.client),
+            meta_mysql_repository=MetaMySQLRepository(meta_session),
+            dw_mysql_repository=DWMySQLRepository(dw_session),
+        )
+
+        start = time.time()
+        try:
+            result = await graph.ainvoke(
+                input={"query": query, "history": history, "session_id": session_id},
                 context=context,
             )
-        elapsed_ms = (time.time() - start) * 1000
+            elapsed_ms = (time.time() - start) * 1000
 
-        generated_sql = result.get("sql", "") or result.get("final_sql", "")
-        error = result.get("error", None)
+            generated_sql = result.get("sql", "") or result.get("final_sql", "")
+            if not generated_sql and result.get("sub_results"):
+                sqls = [sr.get("sql", "") for sr in result["sub_results"] if sr.get("sql")]
+                generated_sql = " ;\n".join(sqls) if sqls else ""
 
-        # SQL 相似度（用收紧后的 sqlglot AST 对比）
-        sql_match_score = compute_sql_similarity(generated_sql, expected_sql)
+            error = result.get("error", None)
 
-        # Execution Match（BIRD-SQL 金标准）：跑 gold + generated 两条 SQL 比对结果集
-        # 比 AST 相似度更准——同义 SQL（LEFT JOIN vs JOIN、子查询 vs JOIN）会被正确判等
-        # 失败兜底：DB 不可用时 execution_match=None，passed 走 AST 阈值
-        execution_match = None
-        exec_detail = None
-        try:
-            async with dw_mysql_client_manager.session_factory() as dw_session:
-                dw_repo = DWMySQLRepository(dw_session)
-                gold_rows, _ = await dw_repo.run(expected_sql)
-                gen_rows, _ = await dw_repo.run(generated_sql) if generated_sql else ([], False)
-                execution_match = compare_results(gold_rows, gen_rows)
-        except Exception as e:
-            exec_detail = f"execution match 跳过: {e}"
+            # Execution match（唯一标准，删掉 AST fallback）
             execution_match = None
+            try:
+                async with dw_mysql_client_manager.session_factory() as dw_session2:
+                    dw_repo = DWMySQLRepository(dw_session2)
+                    gold_rows, _ = await dw_repo.run(expected_sql)
+                    if generated_sql and not generated_sql.strip().upper().startswith("SELECT 1"):
+                        gen_rows, _ = await dw_repo.run(generated_sql)
+                        execution_match = compare_results(gold_rows, gen_rows)
+                    else:
+                        execution_match = False
+                        error = error or "generated SQL 是 SELECT 1 fallback（generate_intent 失败）"
+            except Exception as e:
+                error = f"execution match 失败: {e}"
+                execution_match = False
 
-        # passed 判定（优先级）：execution_match=True 直接过；否则走收紧后的 AST 阈值
-        if execution_match is True:
-            passed = True
-        elif execution_match is False:
-            # 两条 SQL 都跑通了但结果不同 → 确定错
-            passed = False
-        else:
-            # execution_match=None（DB 不可用 / SQL 跑挂）→ fallback 到 AST
-            passed = sql_match_score >= EVAL_CONFIG["sql_match_threshold"]
+            # AST 相似度（仅作参考记录，不再用于 passed 判定）
+            sql_match_score = compute_sql_similarity(generated_sql, expected_sql)
 
-        return {
-            "query": query,
-            "difficulty": difficulty,
-            "expected_sql": expected_sql,
-            "generated_sql": generated_sql,
-            "sql_match_score": sql_match_score,
-            "execution_match": execution_match,
-            "exec_detail": exec_detail,
-            "elapsed_ms": elapsed_ms,
-            "error": error,
-            "passed": passed,
-        }
-    except Exception as e:
-        return {
-            "query": query,
-            "difficulty": difficulty,
-            "expected_sql": expected_sql,
-            "generated_sql": "",
-            "sql_match_score": 0.0,
-            "result_match_score": 0.0,
-            "elapsed_ms": (time.time() - start) * 1000,
-            "error": f"Agent 异常: {e}",
-            "passed": False,
-        }
+            return {
+                "query": query,
+                "difficulty": difficulty,
+                "expected_sql": expected_sql,
+                "generated_sql": generated_sql,
+                "sql_match_score": sql_match_score,
+                "execution_match": execution_match,
+                "elapsed_ms": elapsed_ms,
+                "error": error,
+                # 2026-07-22：passed 唯一标准 = execution match，删掉 AST 假绿兜底
+                "passed": execution_match is True,
+            }
+        except Exception as e:
+            return {
+                "query": query,
+                "difficulty": difficulty,
+                "expected_sql": expected_sql,
+                "generated_sql": "",
+                "sql_match_score": 0.0,
+                "execution_match": False,
+                "elapsed_ms": (time.time() - start) * 1000,
+                "error": f"Agent 异常: {e}",
+                "passed": False,
+            }
 
 
 def compute_sql_similarity(generated: str, expected: str) -> float:
@@ -347,78 +406,104 @@ def _scalar_equal(g, e) -> bool:
 
 
 async def main():
-    # 2026-07-22：支持 EVAL_LIMIT 环境变量控制跑多少条（快速验证/baseline 生成用）
-    # 不设则全跑（59 条，约 8-10 分钟）
+    # 2026-07-22：支持 EVAL_LIMIT 控制条数 + EVAL_MODE 控制路径
+    # EVAL_MODE: single（只跑单 agent）/ multi（只跑 multi-agent）/ both（都跑，默认）
     import os
     limit = int(os.environ.get("EVAL_LIMIT", "0")) or len(TEST_CASES_E2E)
+    eval_mode = os.environ.get("EVAL_MODE", "both")  # single / multi / both
     cases = TEST_CASES_E2E[:limit]
 
+    modes = []
+    if eval_mode in ("single", "both"):
+        modes.append(("single", agent_graph, False))
+    if eval_mode in ("multi", "both"):
+        modes.append(("multi", supervisor_graph, True))
+
     print(f"\n=== 端到端 SQL 生成评测 ===")
-    print(f"评测集大小: {len(cases)} 条" + (f"（限制前 {limit} 条，全集 {len(TEST_CASES_E2E)}）" if limit < len(TEST_CASES_E2E) else ""))
+    print(f"评测集大小: {len(cases)} 条" + (f"（限制前 {limit} 条）" if limit < len(TEST_CASES_E2E) else ""))
+    print(f"评测模式: {eval_mode}（路径: {[m[0] for m in modes]}）")
     print(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
-    # graph 已经在 import 时拿到
+    # 每条 case 在每个 mode 下各跑一次
+    all_results = []  # 每个元素含 mode + result
+    for mode_name, graph_to_use, use_multi in modes:
+        print(f"\n--- 路径: {mode_name} ---")
+        for i, case in enumerate(cases):
+            print(f"[{mode_name} {i+1}/{len(cases)}] {case['query'][:35]}...", end=" ", flush=True)
+            result = await run_one_case(graph_to_use, case, use_multi_agent=use_multi)
+            result["eval_mode"] = mode_name
+            all_results.append(result)
+            status = "✓" if result["passed"] else "✗"
+            em = result.get("execution_match")
+            em_tag = "[EXEC✓]" if em is True else ("[EXEC✗]" if em is False else "[EXEC?]")
+            print(f"{status} {em_tag} ({result['elapsed_ms']:.0f}ms)")
 
-    # 跑所有 case
-    results = []
-    for i, case in enumerate(cases):
-        print(f"[{i+1}/{len(cases)}] {case['query'][:40]}...", end=" ")
-        print(f"[{i+1}/{len(TEST_CASES_E2E)}] {case['query'][:40]}...", end=" ")
-        result = await run_one_case(agent_graph, case)
-        results.append(result)
-        status = "✓" if result["passed"] else "✗"
-        score = result["sql_match_score"]
-        em = result.get("execution_match")
-        em_tag = "" if em is None else (" [EXEC✓]" if em else " [EXEC✗]")
-        print(f"{status} (sql_match={score:.2f}{em_tag}, {result['elapsed_ms']:.0f}ms)")
-
-    # 汇总
-    total = len(results)
-    passed = sum(1 for r in results if r["passed"])
-    overall_accuracy = passed / total if total else 0
-
-    # 按难度分组
-    by_difficulty = defaultdict(list)
-    for r in results:
-        by_difficulty[r["difficulty"]].append(r)
-
+    # 按 mode 分组统计
     print(f"\n=== 评测结果 ===")
-    print(f"总准确率: {passed}/{total} = {overall_accuracy:.1%}")
+    mode_stats = {}
+    for mode_name, _, _ in modes:
+        mode_results = [r for r in all_results if r["eval_mode"] == mode_name]
+        total = len(mode_results)
+        passed = sum(1 for r in mode_results if r["passed"])
+        acc = passed / total if total else 0
+        mode_stats[mode_name] = {"total": total, "passed": passed, "accuracy": acc}
+        print(f"{mode_name}: {passed}/{total} = {acc:.1%}")
 
-    # Execution match 覆盖率（看多少 case 真跑了 execution vs fallback 到 AST）
-    exec_runs = sum(1 for r in results if r.get("execution_match") is not None)
-    exec_passes = sum(1 for r in results if r.get("execution_match") is True)
-    print(f"Execution match: {exec_runs}/{total} 跑了（{exec_passes} 通过）")
-    if exec_runs < total:
-        print(f"  ⚠ {total - exec_runs} 条 fallback 到 AST 阈值（可能 DB 不可用或 SQL 跑挂）")
+    # 按难度分组（single 模式为准，multi 另算）
+    by_difficulty = defaultdict(list)
+    for r in all_results:
+        if r["eval_mode"] == modes[0][0]:  # 第一个 mode（通常是 single）
+            by_difficulty[r["difficulty"]].append(r)
 
-    print(f"\n按难度分组:")
+    print(f"\n按难度分组（{modes[0][0]} 路径）:")
     for diff, items in sorted(by_difficulty.items()):
         diff_passed = sum(1 for r in items if r["passed"])
         print(f"  {diff}: {diff_passed}/{len(items)} = {diff_passed/len(items):.1%}")
 
-    # 失败 case
-    failed = [r for r in results if not r["passed"]]
+    # 两个模式都跑时，找出 single 过但 multi 挂的 case（暴露 multi-agent bug）
+    if len(modes) == 2:
+        single_map = {r["query"]: r["passed"] for r in all_results if r["eval_mode"] == "single"}
+        multi_map = {r["query"]: r["passed"] for r in all_results if r["eval_mode"] == "multi"}
+        discrepancies = [
+            q for q in single_map
+            if single_map.get(q) and not multi_map.get(q)
+        ]
+        if discrepancies:
+            print(f"\n⚠ single 过但 multi 挂的 case（{len(discrepancies)} 条，暴露 multi-agent bug）:")
+            for q in discrepancies[:5]:
+                print(f"  - {q}")
+
+    # 失败 case（每个 mode 各显示几条）
+    failed = [r for r in all_results if not r["passed"]]
     if failed:
         print(f"\n=== 失败 case ({len(failed)} 条) ===")
-        for r in failed[:10]:  # 最多显示 10 条
-            print(f"\n  Query: {r['query']}")
-            print(f"  Expected: {r['expected_sql'][:200]}")
-            print(f"  Generated: {r['generated_sql'][:200]}")
+        for r in failed[:10]:
+            print(f"\n  [{r['eval_mode']}] Query: {r['query']}")
+            print(f"  Expected: {r['expected_sql'][:150]}")
+            print(f"  Generated: {r['generated_sql'][:150]}")
             if r["error"]:
-                print(f"  Error: {r['error']}")
+                print(f"  Error: {r['error'][:150]}")
 
     # 保存结果
     results_dir = Path(__file__).parent / "results"
     results_dir.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     result_file = results_dir / f"eval_e2e_{timestamp}.json"
+
+    # 总准确率：取 single 模式（如果跑了 both，single 是主指标）
+    primary_mode = modes[0][0]
+    primary_results = [r for r in all_results if r["eval_mode"] == primary_mode]
+    primary_passed = sum(1 for r in primary_results if r["passed"])
+    primary_acc = primary_passed / len(primary_results) if primary_results else 0
+
     with open(result_file, "w", encoding="utf-8") as f:
         json.dump({
             "timestamp": timestamp,
-            "total": total,
-            "passed": passed,
-            "accuracy": overall_accuracy,
+            "eval_mode": eval_mode,
+            "total": len(primary_results),
+            "passed": primary_passed,
+            "accuracy": primary_acc,
+            "mode_stats": mode_stats,  # 每个 mode 的准确率
             "by_difficulty": {
                 diff: {
                     "total": len(items),
@@ -426,13 +511,13 @@ async def main():
                 }
                 for diff, items in by_difficulty.items()
             },
-            "details": results,
+            "details": all_results,
         }, f, ensure_ascii=False, indent=2, default=str)
     print(f"\n结果已保存到: {result_file}")
     print(f"\n=== 复盘建议 ===")
-    print(f"1. 看 by_difficulty 哪个难度通过率最低，先补那个")
-    print(f"2. 看 failed case 列表，是 SQL 语法错、还是召回错、还是 Prompt 没引导好")
-    print(f"3. baseline 跑完后，加 Function Call 再跑一次，对比提升")
+    print(f"1. 看 mode_stats 对比 single vs multi 准确率——差距大说明 multi-agent 有 bug")
+    print(f"2. 看 single 过但 multi 挂的 case，是 aggregator 透传还是 reviewer 误杀")
+    print(f"3. 失败 case 里 Error 含 'SELECT 1 fallback' → generate_intent 解析失败（think 块）")
 
 
 if __name__ == "__main__":
