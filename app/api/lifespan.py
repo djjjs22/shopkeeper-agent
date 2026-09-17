@@ -156,11 +156,17 @@ async def lifespan(app: FastAPI):
         import os
 
         tracing_on = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
-        if tracing_on:
+        api_key = os.getenv("LANGCHAIN_API_KEY", "")
+        if tracing_on and api_key and not api_key.startswith("lsv2_pt-your-"):
             project = os.getenv("LANGCHAIN_PROJECT", "shopkeeper-agent")
             _log.info(
                 "[OK] LangSmith tracing 已启用（project=%s，17 节点 + multi-agent 自动上报）",
                 project,
+            )
+        elif tracing_on and (not api_key or api_key.startswith("lsv2_pt-your-")):
+            _log.warning(
+                "[WARN] LANGCHAIN_TRACING_V2=true 但 LANGCHAIN_API_KEY 仍是占位符，"
+                "trace 不会上报。请在 .env 替换真实 key"
             )
         else:
             _log.info("[INFO] LangSmith tracing 未启用（设 LANGCHAIN_TRACING_V2=true 开启）")
