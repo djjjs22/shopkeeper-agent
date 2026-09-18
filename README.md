@@ -2,9 +2,17 @@
 
 ## 🎬 演示视频
 
-<video src="https://raw.githubusercontent.com/djjjs22/shopkeeper-agent/main/docs/demo.mp4" controls width="100%"></video>
-
-> 如果播放器无法加载，[点击下载 demo.mp4（17 MB）](./docs/demo.mp4)本地观看。
+> ⚠️ **GitHub Markdown 不支持 mp4 内联播放**（[官方说明](https://github.com/orgs/community/discussions/18784)）——直接把 mp4 commit 进仓库只能显示下载链接,没法在 README 里直接 ▶ 播放。
+>
+> **推荐方案**:上传到 B 站 / YouTube,README 嵌 iframe。下面是占位,你把视频传 B 站后把 `BV号` 替换到 `src` 里即可内联播放。
+>
+> ```html
+> <iframe src="//player.bilibili.com/player.html?bvid=BVxxxxxxxxx&autoplay=0"
+>         width="100%" height="540" scrolling="no" frameborder="0"
+>         allowfullscreen></iframe>
+> ```
+>
+> 也可以[下载 demo.mp4（17 MB）](./docs/demo.mp4)本地观看(本次会话已 commit)。
 
 > 用户说"统计 2025 年第一季度各大区的 GMV" → 系统自动检索表结构、生成 SQL、安全校验、执行 → 返回结构化结果。
 >
