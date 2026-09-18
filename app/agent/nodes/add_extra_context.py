@@ -25,8 +25,19 @@ async def add_extra_context(state: DataAgentState, runtime: Runtime[DataAgentCon
     try:
         dw_mysql_repository = runtime.context["dw_mysql_repository"]
 
-        # 当前日期信息会帮助模型处理“今天 本月 本季度 最近 N 天”等相对时间表达
-        today = date.today()
+        # 2026-09-16 加固：eval 路径可以传 eval_today（跟 rewrite_query 一致）
+        # 让"最近7天"等相对时间表达跟 expected SQL 写死的日期范围对齐
+        eval_today_str = state.get("eval_today")
+        if eval_today_str:
+            try:
+                from datetime import datetime as _dt
+                today = _dt.strptime(eval_today_str, "%Y-%m-%d").date()
+            except ValueError:
+                logger.warning(f"eval_today 格式错误: {eval_today_str}, fallback date.today()")
+                today = date.today()
+        else:
+            today = date.today()
+        # 当前日期信息会帮助模型处理"今天 本月 本季度 最近 N 天"等相对时间表达
         date_str = today.strftime("%Y-%m-%d")
         weekday = today.strftime("%A")
         quarter = f"Q{(today.month - 1) // 3 + 1}"

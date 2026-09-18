@@ -61,7 +61,7 @@ logger = logging.getLogger(__name__)
 _SQL_TEMPLATE_STR = """\
 SELECT
   {%- for col in select %}
-  {{ col.expr }} AS {{ col.alias }}{% if not loop.last %},{% endif %}
+  {{ col.expr }}{% if col.alias and ' AS ' not in col.expr.upper() %} AS {{ col.alias }}{% endif %}{% if not loop.last %},{% endif %}
   {%- endfor %}
 FROM {{ from_ }}
 {%- for join in joins %}
@@ -201,5 +201,20 @@ def render_sql(intent: dict) -> str:
     if not normalized["select"]:
         logger.warning("sql_template: select 为空，返回 SELECT 1")
         sql = "SELECT 1 AS fallback"
+        return sql
+
+    # 2026-09-16 加固:支持 UNION ALL 多组合并
+    # intent._union_all 是 list[dict],每个 dict 是另一个完整的 select 块
+    # 渲染后追加 "UNION ALL <第二个 SELECT>"
+    union_blocks = intent.get("_union_all")
+    if union_blocks and isinstance(union_blocks, list):
+        for block in union_blocks:
+            if not isinstance(block, dict):
+                continue
+            # 递归调用 render_sql 渲染每个 UNION ALL 分支
+            # 注意:分支里不应该再有 _union_all,防止循环
+            block_sql = render_sql(block)
+            sql = f"{sql} UNION ALL {block_sql}"
+        logger.info(f"sql_template: UNION ALL 追加 {len(union_blocks)} 个分支")
 
     return sql

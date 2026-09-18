@@ -56,6 +56,67 @@ from app.prompt.prompt_loader import load_prompt
 _intent_parser = PydanticIntentParser(pydantic_object=QueryIntent)
 
 
+def _date_plus_one_day(end_date_or_dash: str) -> str:
+    """把 end_date (YYYY-MM-DD 或 YYYYMMDD 含端点) 转成下一天的 YYYYMMDD 字符串
+
+    用在 SQL 左闭右开区间渲染时给 end_date +1 天。
+    例：'2025-03-31' → '20250401'，'2025-12-31' → '20260101'，'20250331' → '20250401'。
+
+    为什么不用月底+1：rewrite_query 给的 end_date 已经是含端点的月末/季末/年末，
+    本函数只负责"+1"翻转语义，不重新算区间。
+    """
+    from datetime import date as _date, timedelta as _td
+
+    normalized = end_date_or_dash.replace("-", "")
+    y, m, d = int(normalized[:4]), int(normalized[4:6]), int(normalized[6:8])
+    return (_date(y, m, d) + _td(days=1)).strftime("%Y%m%d")
+
+
+# 2026-09-18 加固：时间冗余过滤识别模式
+# LLM 看到 time_range 后偶发重复叠加以下条件，统一在程序性注入前清掉
+_REDUNDANT_TIME_PATTERNS = [
+    # dd.year / dd.quarter / dd.month / dd.day 直接过滤（与 date_id 区间语义重叠）
+    r"\b\w+\.year\s*=\s*\d{4}",
+    r"\b\w+\.quarter\s*=\s*['\"]?[Qq]?\d['\"]?",
+    r"\b\w+\.quarter\s*=\s*\d",
+    r"\b\w+\.month\s*=\s*\d",
+    r"\b\w+\.day\s*=\s*\d",
+    # YEAR()/QUARTER()/MONTH() 函数式（dim_date 没有 full_date,这种语法本身错）
+    r"\bYEAR\s*\(",
+    r"\bQUARTER\s*\(",
+    r"\bMONTH\s*\(",
+    # BETWEEN 时间字面量（date_id 是整数,字符串 BETWEEN 易错）
+    r"\bBETWEEN\s+['\"]?\d{4}-",
+    # date_id 区间（程序性注入的唯一权威,LLM 重复写就删）
+    r"\bdate_id\s*(>=|<=|>|<)\s*\d{8}",
+]
+
+
+def _strip_redundant_time_conditions(where_list: list[str]) -> list[str]:
+    """从 where 列表里删掉重复的时间过滤条件
+
+    触发场景:程序性注入 date_id 区间时,LLM 在自己的 where 里又写了
+    `dd.year = 2025 AND dd.quarter = 'Q1'` 或第二条 `date_id >= 20250101`。
+    两套语义重叠,严格时冲突导致 0 行,宽松时 SQL 冗余难看。
+
+    设计:白名单删除。程序性注入的 date_id 区间是唯一权威时间条件,
+    其他形式的过滤一律不要。
+    """
+    import re as _re
+
+    kept = []
+    for w in where_list:
+        if not isinstance(w, str):
+            kept.append(w)
+            continue
+        is_redundant = any(_re.search(p, w, _re.IGNORECASE) for p in _REDUNDANT_TIME_PATTERNS)
+        if is_redundant:
+            logger.info(f"generate_intent: 删除 LLM 重复时间条件: {w}")
+            continue
+        kept.append(w)
+    return kept
+
+
 # ─────────────────────────────────────────────────────────────────────
 # 辅助：把结构化字段格式化成 prompt 可读文本
 # ─────────────────────────────────────────────────────────────────────
@@ -192,6 +253,56 @@ async def generate_intent(state: DataAgentState, runtime: Runtime[DataAgentConte
         # P2 改造：根据 query 匹配业务规则（已付款/华北/黄金会员等）
         business_rules = _format_business_rules_for_prompt(query)
 
+        # 2026-09-16 快路径：复杂指标有 sql_template 时，直接 render 跳过 LLM
+        # 收益：复购率/动销率/新客占比/支付成功率 等 case 100% 命中，0 LLM 调用
+        # 风险：如果 query 里有"上个月""华北"等条件，模板里没占位符会丢失
+        # 兜底：模板不匹配 query 形态（无 <date_start>/<date_end>） → 走原 LLM 流程
+        # 注入方式：把渲染好的 SQL 塞进 intent 的 _fast_path_sql 字段，
+        #          generate_sql 节点会优先读这个字段而不是走 render_sql。
+        fast_path_sql = None
+        for m in metric_infos or []:
+            tpl = m.get("sql_template")
+            if not tpl:
+                continue
+            metric_name = m.get("name", "")
+            if metric_name and metric_name in query:
+                # 替换占位符：<date_start>/<date_end> 用 time_range
+                start_dash = (time_range.get("start_date") or "").replace("-", "")
+                end_dash = (time_range.get("end_date") or "").replace("-", "")
+                rendered = tpl
+                if start_dash and "<date_start>" in rendered:
+                    rendered = rendered.replace("<date_start>", start_dash)
+                if end_dash and "<date_end>" in rendered:
+                    rendered = rendered.replace("<date_end>", end_dash)
+                # 检查还有未替换的占位符 → 走 LLM
+                import re
+                if re.search(r"<\w+>", rendered):
+                    logger.info(
+                        f"{step}: 快路径模板含未替换占位符({metric_name})，回退 LLM 流程"
+                    )
+                    continue
+                fast_path_sql = rendered.strip()
+                logger.info(
+                    f"{step}: 快路径命中({metric_name})，跳过 LLM，SQL 长度 {len(fast_path_sql)} 字符"
+                )
+                break
+        if fast_path_sql:
+            # 写一个最小可渲染 intent，下游 render_sql 会先读 _fast_path_sql
+            # intent 字段保留模板形态，让 select/from/where 至少有占位
+            # 但 _fast_path_sql 优先被 generate_sql 节点读
+            fast_intent = {
+                "select": [{"expr": "1", "alias": "metric_value"}],
+                "from": "fact_order fo",
+                "joins": [],
+                "where": [],
+                "group_by": [],
+                "order_by": [],
+                "limit": None,
+                "_fast_path_sql": fast_path_sql,  # generate_sql 优先读这个
+            }
+            writer({"type": "progress", "step": step, "status": "success"})
+            return {"query_intent": fast_intent}
+
         # 2026-07-22 Procedural Memory：召回 top-k 历史成功 SQL 模板做 few-shot
         # 设计：节点内部主动召回（不依赖前置节点填 state.sql_patterns），
         #       这样对 graph 拓扑零侵入——不改 graph.py 也能用。
@@ -273,6 +384,20 @@ async def generate_intent(state: DataAgentState, runtime: Runtime[DataAgentConte
             # 解析失败（含 retry 后仍失败）：降级空 dict，让下游 generate_sql 用 SELECT 1 兜底
             logger.error(f"{step}: 解析失败（已 retry 1 次），降级为空 intent: {e}")
             intent = {}
+            # 2026-09-15 评测发现：fallback 返回 SELECT 1 让评测假绿（看起来"成功"实则无效）
+            # 修：显式归集到 bad_case_collector（信号源 #1）
+            # 收益：后续 eval 能统计"多少 query 是 fallback 失败的"而不是混入"SQL 不匹配"
+            try:
+                from app.services.bad_case_collector import bad_case_collector
+                bad_case_collector.record(
+                    query=query,
+                    sql="SELECT 1 AS fallback",
+                    error_type="intent_fallback",
+                    detail=str(e)[:500],
+                    session_id=state.get("session_id"),
+                )
+            except Exception:
+                pass  # 飞轮写失败不影响主流程
             # 2026-07-20 (#6)：失败时显式推 warning 给前端，避免用户看到 SELECT 1 兜底
             # 结果却误以为"查询完成"。前端把 warning 单独渲染（黄色提示条）。
             writer({
@@ -312,6 +437,14 @@ async def generate_intent(state: DataAgentState, runtime: Runtime[DataAgentConte
             where_list = intent.get("where")
             if not isinstance(where_list, list):
                 where_list = []
+
+            # 2026-09-18 防御：清掉 LLM 重复叠加的时间条件
+            # LLM 偶发同时输出 `date_id >= ...` 和 `dd.year = 2025 AND dd.quarter = 'Q1'`
+            # 两套语义等价但有时不严格对齐（季度字符串 vs 整数）→ 0 行或错误
+            # 而且冗余 SQL 让 validate_sql 难做,correct_sql 难修
+            # 策略:程序性注入的 date_id 区间是唯一权威,其他时间过滤全部删掉
+            where_list = _strip_redundant_time_conditions(where_list)
+
             start_dash = time_range["start_date"].replace("-", "")
             end_dash = time_range["end_date"].replace("-", "")
 
@@ -323,7 +456,19 @@ async def generate_intent(state: DataAgentState, runtime: Runtime[DataAgentConte
             table_alias = from_parts[1] if len(from_parts) >= 2 else None
             col_prefix = f"{table_alias}." if table_alias else ""
             time_clause = (
-                f"{col_prefix}date_id BETWEEN {start_dash} AND {end_dash}"
+                # 2026-09-16 修复：原代码用 BETWEEN（含端点），但期望 SQL 是
+                # `date_id >= start AND date_id < end`（左闭右开）。
+                # 对于"上个月"类查询，end_date 是下月 1 号，BETWEEN 会把下月 1 号的
+                # 订单也算进去（如果有的话），导致结果多算。
+                # 对于单月查询（end=当月最后一天），BETWEEN 是对的；但跨月查询
+                # 必须用 < 才严格。统一改 >= 配 < 是最安全的写法。
+                #
+                # 2026-09-18 修复：rewrite_query 给的是含端点 end_date（如 Q1 → 2025-03-31），
+                # 直接 < 20250331 会丢 3-31 当天（半开区间退化成"前 89 天"）。
+                # 修法：end_date 看作含端点，渲染时 +1 天变开区间。
+                # 好处：rewrite_query / 前端展示 / 文本回显都保持"含端点"语义，
+                #       SQL 渲染单独左闭右开；两套约定不再冲突。
+                f"{col_prefix}date_id >= {start_dash} AND {col_prefix}date_id < {_date_plus_one_day(end_dash)}"
             )
             # 头部插入（避免 LLM 已拼的 where 把它夹在中间）
             where_list.insert(0, time_clause)

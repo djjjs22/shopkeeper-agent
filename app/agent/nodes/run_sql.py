@@ -306,9 +306,31 @@ async def run_sql(
         # ⭐ 空结果校验（防 LLM 语义幻觉：SQL 语法对但 WHERE 条件偏差 → 空结果）
         if len(result) == 0:
             query = state["query"]
+            # 2026-09-18 改进:给更具体的诊断,告诉用户可能卡在哪
+            sql_text = state.get("sql", "")
+            hints = []
+            if "date_id" in sql_text:
+                # 抓 date_id 比较的数字,看是否跨了数据范围
+                import re as _re
+                ids = [int(x) for x in _re.findall(r"date_id\s*(?:>=|<|>|<=)\s*(\d{8})", sql_text)]
+                if ids:
+                    min_id, max_id = min(ids), max(ids)
+                    # 项目数据范围 2025-01 ~ 2026-07
+                    if min_id < 20250101:
+                        hints.append("开始日期早于 2025-01")
+                    if max_id > 20260731:
+                        hints.append("结束日期晚于 2026-07（项目最末月）")
+                    if min_id >= 20260801 and max_id <= 20260831:
+                        hints.append("8 月之后无数据")
+            if "year" in sql_text.lower() and "quarter" in sql_text.lower():
+                hints.append("检查 dd.year / dd.quarter 是否有对应数据")
+            if "region_name" in sql_text and "'" in sql_text:
+                hints.append("大区名写法注意:'华北' 不是 '华北大区'")
+            hint_text = ("；".join(hints) + "；") if hints else ""
             warning_msg = (
-                f"查询'{query}'返回0行数据，"
-                f"可能是查询条件过于严格或者筛选条件有误"
+                f"查询'{query}'返回0行数据。"
+                f"{hint_text}可能是查询条件过于严格或者筛选条件有误，"
+                f"建议换一种问法"
             )
             writer({"type": "warning", "message": warning_msg})
             logger.warning(f"[结果校验] 空结果警告: {warning_msg}")
@@ -333,6 +355,13 @@ async def run_sql(
                 f"[SQL安全] 结果截断：返回 {len(result)} 行（实际更多）"
             )
         writer(result_event)
+
+        # 2026-09-15 修复：multi-agent supervisor 链路 (_run_one_sub) 需要从
+        # stream_mode="custom" 拿到 SQL，但前端只需要 type=result。
+        # 推一条独立 type=sql 事件给上游 supervisor 收集，单 agent 路径下
+        # 前端可忽略 type=sql（不在前端事件 handler 里）。
+        # sql 是清洗后的最终执行版本（含 _clean_sql 去掉 ```sql``` 围栏、validate 通过的形态）
+        writer({"type": "sql", "data": sql})
 
     except Exception as e:
         # 外层 except：捕获数据库执行层面的错误

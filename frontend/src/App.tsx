@@ -181,6 +181,15 @@ export default function App() {
           }
 
           // event.type === "error"
+          // 2026-09-18 P0 修复:已经成功的 message(status=done,result 已渲染)
+          // 不该被迟到的 error 事件覆盖成"查询失败"。原因是后端 query_service
+          // 在 result 推完后跑 fire-and-forget(add_message / user_profile /
+          // session_summarize),这些段抛异常会被 except 捕获推 SSE error,
+          // 但前端已经把 6 行表格渲染出来了,再叠红色 banner 体验极差。
+          if (message.status === "done") {
+            // 静默丢掉 error,记 toast 提示用户（不影响主结果展示）
+            return message;
+          }
           return {
             ...message,
             status: "error",

@@ -201,6 +201,9 @@ async def lookup_business_metric(
         "description": getattr(candidate, "description", ""),
         "relevant_columns": rc,
         "alias": alias,
+        # 2026-09-16 加固：复杂指标 SQL 模板返回给 generate_intent
+        # 有模板 → 直接 render 替换占位符；没模板 → None（让 LLM 自己写）
+        "sql_template": getattr(candidate, "sql_template", None),
     }
 
     # 7. 写缓存

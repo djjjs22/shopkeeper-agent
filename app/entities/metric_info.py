@@ -17,3 +17,6 @@ class MetricInfo:
     description: str | None = None
     relevant_columns: list[str] | None = field(default_factory=list)
     alias: list[str] | None = field(default_factory=list)
+    # 2026-09-16 加固：复杂业务指标的 SQL 模板（占位符 <date>/<value>/<number>）
+    # yaml 配置 → 同步到 MySQL → generate_intent 召回时返回 → render 替换占位符
+    sql_template: str | None = None

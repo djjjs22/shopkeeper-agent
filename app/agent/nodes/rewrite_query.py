@@ -61,7 +61,7 @@ def _format_history_for_prompt(history: list) -> str:
     return "\n".join(lines)
 
 
-def _resolve_relative_time(text: str) -> tuple[str, TimeRangeState]:
+def _resolve_relative_time(text: str, today: date = None) -> tuple[str, TimeRangeState]:
     """用 Python 确定性解析常见相对时间表达，返回 (清理后文本, 时间范围)
 
     改前（2026-07-14 前）：返回字符串，把 "上一个自然月" 替换成
@@ -83,7 +83,9 @@ def _resolve_relative_time(text: str) -> tuple[str, TimeRangeState]:
     """
     import re
 
-    today = date.today()
+    # 2026-09-16 加固：eval 路径传 eval_today（"模拟今天"），让 expected 写死的日期
+    # 能跟运行时日期对齐；生产路径不传 → fallback date.today()。
+    today = today or date.today()
     start_date = ""
     end_date = ""
     raw_expression = ""
@@ -425,6 +427,11 @@ async def rewrite_query(state: DataAgentState, runtime: Runtime[DataAgentContext
         # 两者输入独立，第二步不依赖第一步输出，原串行实现白白多走一个 LLM RTT。
         # 改用 asyncio.gather 并发，单次问数节省 ~500ms-2s（一个 LLM 往返）。
         # gather 默认 fail-fast：任一抛错立即抛出，进入下面统一的 except 兜底。
+        # 2026-09-16 加固：第一步截尾（不要看自己当前 query），第二步用完整 history
+        # 因为 inherited 提取需要"那"= 刚才那个 query 的指代
+        history_for_rewrite = history[:-1] if history else []  # 截尾,给时间标准化
+        history_for_inherited = history  # 完整,给 inherited 提取
+
         prompt = PromptTemplate(
             template=load_prompt("rewrite_query"),
             template_format="jinja2",
@@ -434,9 +441,9 @@ async def rewrite_query(state: DataAgentState, runtime: Runtime[DataAgentContext
 
         rewritten_task = chain.ainvoke({
             "query": query,
-            "history": _format_history_for_prompt(history),
+            "history": _format_history_for_prompt(history_for_rewrite),
         })
-        inherited_task = _extract_inherited_context(llm, query, history)
+        inherited_task = _extract_inherited_context(llm, query, history_for_inherited)
 
         rewritten, inherited = await asyncio.gather(
             rewritten_task, inherited_task
@@ -447,7 +454,17 @@ async def rewrite_query(state: DataAgentState, runtime: Runtime[DataAgentContext
         # 这一步保证日期计算不会出错，不依赖 LLM 的数学能力
         # 2026-07-14 改造：返回 (清理后文本, TimeRangeState)
         # 文本里不再有日期字符串，时间单独落到结构化字段
-        _, time_range = _resolve_relative_time(rewritten)
+        # 2026-09-16 加固：eval 路径可以传 eval_today="2026-06-15" 让"上个月"= 5 月
+        # 跟 expected SQL 写死的 6 月范围对齐（生产路径不传 → 用真实今天）
+        eval_today_str = state.get("eval_today")
+        eval_today_date = None
+        if eval_today_str:
+            try:
+                from datetime import datetime as _dt
+                eval_today_date = _dt.strptime(eval_today_str, "%Y-%m-%d").date()
+            except ValueError:
+                logger.warning(f"eval_today 格式错误: {eval_today_str}, fallback date.today()")
+        _, time_range = _resolve_relative_time(rewritten, today=eval_today_date)
 
         logger.info(
             f"查询改写: query={query!r} time_range={dict(time_range)} "

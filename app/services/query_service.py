@@ -148,8 +148,15 @@ class QueryService:
                 session_id=session_id, query=query, sql="",
                 success=False, latency_ms=(_time.monotonic() - _start_ts) * 1000,
             )
-            error = {"type": "error", "message": _friendly_error(e)}
-            yield f"data: {json.dumps(error, ensure_ascii=False, default=str)}\n\n"
+            # 2026-09-18 P0 修复:仅在 result 还没推出去时才推 SSE error
+            # 详见 query() 注释 —— 避免 result 已渲染再叠错误 banner 的 P0 UX bug
+            if last_result is None:
+                error = {"type": "error", "message": _friendly_error(e)}
+                yield f"data: {json.dumps(error, ensure_ascii=False, default=str)}\n\n"
+            else:
+                logger.warning(
+                    f"[query_multi_agent] result 已发后链路异常,不再推 SSE error: {e}"
+                )
 
     async def query(self, query: str, session_id: str = "default"):
         """执行一次问数工作流，并逐段产出 SSE 消息
@@ -208,15 +215,31 @@ class QueryService:
                 result_text = str(last_result)[:200]  # 截断防止存太大
                 # 注意：这里存的是用户原始 query，不是 enhanced_query
                 # 否则历史里全是"【对话历史】...【任务类型】..."这种元数据
-                await asyncio.gather(
-                    add_message(session_id, "user", query),
-                    add_message(session_id, "assistant", result_text),
-                )
-                # 2026-07-22 Semantic Memory：抽取用户偏好（fire-and-forget）
-                # 连续 3 次带"按地区" → preferred_dim=region confidence=0.9
-                await user_profile_service.update(session_id, query)
-                # 2026-07-22 Episodic Memory：历史超 5 轮触发摘要（防 token 爆炸）
-                await session_summarizer.summarize_if_needed(session_id)
+
+                # 2026-09-18 P0 修复:每段 fire-and-forget 单独 try/except,
+                # 一段失败不影响其他段(比如 Redis 写挂了不该让 user_profile 也不写)
+                # 更重要的是不让任意一段的失败冒泡到 query() 的 except,
+                # 触发"result 已发出还推 error" 的 P0 UX bug
+                try:
+                    await asyncio.gather(
+                        add_message(session_id, "user", query),
+                        add_message(session_id, "assistant", result_text),
+                    )
+                except Exception as e:
+                    logger.warning(f"[query] 写 session 历史失败（不影响用户结果）: {e}")
+
+                try:
+                    # 2026-07-22 Semantic Memory：抽取用户偏好（fire-and-forget）
+                    # 连续 3 次带"按地区" → preferred_dim=region confidence=0.9
+                    await user_profile_service.update(session_id, query)
+                except Exception as e:
+                    logger.warning(f"[query] user_profile 更新失败（不影响用户结果）: {e}")
+
+                try:
+                    # 2026-07-22 Episodic Memory：历史超 5 轮触发摘要（防 token 爆炸）
+                    await session_summarizer.summarize_if_needed(session_id)
+                except Exception as e:
+                    logger.warning(f"[query] session 摘要失败（不影响用户结果）: {e}")
 
         except Exception as e:
             # 流式接口已经开始返回后不能再改 HTTP 状态码，因此把异常也包装成一条 SSE 消息
@@ -227,5 +250,14 @@ class QueryService:
                 session_id=session_id, query=query, sql="",
                 success=False, latency_ms=(_time.monotonic() - _start_ts) * 1000,
             )
-            error = {"type": "error", "message": _friendly_error(e)}
-            yield f"data: {json.dumps(error, ensure_ascii=False, default=str)}\n\n"
+            # 2026-09-18 P0 修复:仅在 result 还没推出去时,才把异常包装成 SSE error
+            # 否则前端已经渲染了 6 行表格,再叠一个 error banner 会让用户以为自己白等
+            # 触发场景:graph.aexception 本身在跑时炸(这种 last_result 还是 None)
+            #         vs graph 跑完 fire-and-forget 抛(已改成单独 try,几乎不进这里)
+            if last_result is None:
+                error = {"type": "error", "message": _friendly_error(e)}
+                yield f"data: {json.dumps(error, ensure_ascii=False, default=str)}\n\n"
+            else:
+                logger.warning(
+                    f"[query] result 已发后链路异常,不再推 SSE error(避免覆盖已渲染结果): {e}"
+                )

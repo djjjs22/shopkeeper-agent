@@ -23,6 +23,9 @@ class MetricInfoState(TypedDict):
     # 指标依赖的字段 id，用来提示模型不要脱离业务口径随意计算
     relevant_columns: list[str]
     alias: list[str]
+    # 2026-09-16 加固：复杂指标的 SQL 模板（None = 让 LLM 自己写；有模板 = render 后直接套用）
+    # generate_intent 节点会检查：有模板且 query 命中该指标 → 跳过 LLM 生成，直接返回 SQL
+    sql_template: Optional[str]
 
 
 class ColumnInfoState(TypedDict):
@@ -107,6 +110,9 @@ class DataAgentState(TypedDict):
     # ── 用户输入与对话上下文 ──
     query: str  # 用户当前问题，只放原始输入，永不被改写节点覆盖（2026-07-14 改造）
     history: list  # 多轮对话历史 [{"role": ..., "content": ...}]，需要历史的节点自己从 state 取
+    # 2026-09-16 加固：eval 用的"模拟今天"。生产路径不会注入（None → 节点 fallback date.today()）。
+    # eval 入口（tests/eval_e2e.py）通过 EVAL_TODAY env 注入，让 expected SQL 写死日期跟运行时日期对齐。
+    eval_today: Optional[str]  # 格式 YYYY-MM-DD；None = 用真实今天
     intent: str  # 意图分类结果，控制 graph 条件边路由
     time_range: TimeRangeState  # 查询改写输出的结构化时间范围（2026-07-14 改造）
     inherited_from_history: InheritedContext  # 从历史继承的实体/条件/维度（2026-07-14 改造）

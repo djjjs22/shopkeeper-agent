@@ -75,9 +75,13 @@ async def _run_one_sub(
                 if chunk.get("type") == "result":
                     rows = chunk.get("data", [])
                 elif chunk.get("type") == "sql":
+                    # 2026-09-15 修复：run_sql 现在推 type=sql 事件
+                    # 之前 rows 一拿到就 break，导致 sql 永远空字符串
                     sql = chunk.get("data", "")
-            if rows:
-                break
+            # 2026-09-15 修复：不能 rows 一拿到就 break —— 否则后续的 type=sql 事件会丢
+            # 行 335 run_sql 先 writer result_event(rows) 再 writer type=sql
+            # break 在 result_event 时会导致 type=sql 永远收不到
+            # 改成流自然结束（post_subgraph 跑完 END 后 astream 退出）
 
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
         columns = list(rows[0].keys()) if rows else []
@@ -291,7 +295,7 @@ def _route_after_reviewer(state: DataAgentState) -> str:
     action = state.get("review_action")
     loop = state.get("review_loop_count", 0)
 
-    if action == "retry" and loop < 2:
+    if action == "retry" and loop < 1:  # 2026-09-16: 2 → 1，防 reviewer 拖累耗时间
         return "data_agent"
     return END
 

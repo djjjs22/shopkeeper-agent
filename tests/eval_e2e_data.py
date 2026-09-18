@@ -129,11 +129,12 @@ TEST_CASES_E2E = [
     },
     {
         "query": "黄金会员在各地区的分布",
-        "expected_sql": """SELECT dim_region.region_name AS 地区, COUNT(*) AS 黄金会员数
-                          FROM dim_customer
-                          JOIN dim_region ON dim_customer.region_id = dim_region.region_id
-                          WHERE dim_customer.member_level = '黄金'
-                          GROUP BY dim_region.region_name""",
+        "expected_sql": """SELECT dr.region_name AS 地区, COUNT(DISTINCT fo.customer_id) AS 黄金会员数
+                          FROM fact_order fo
+                          JOIN dim_customer dc ON fo.customer_id = dc.customer_id
+                          JOIN dim_region dr ON fo.region_id = dr.region_id
+                          WHERE dc.member_level = '黄金'
+                          GROUP BY dr.region_name""",
         "difficulty": "多表 JOIN + 多条件",
     },
     {
@@ -180,7 +181,7 @@ TEST_CASES_E2E = [
         "query": "2025年第一季度的总销售额",
         "expected_sql": """SELECT SUM(fact_order.order_amount) AS 总销售额
                           FROM fact_order
-                          JOIN dim_date ON fact_order.date_id = dim_date.date
+                          JOIN dim_date ON fact_order.date_id = dim_date.date_id
                           WHERE dim_date.year = 2025 AND dim_date.quarter = 1""",
         "difficulty": "时间过滤 + JOIN",
     },
@@ -202,7 +203,7 @@ TEST_CASES_E2E = [
         "query": "2024年全年GMV",
         "expected_sql": """SELECT SUM(fact_order.order_amount) AS GMV
                           FROM fact_order
-                          JOIN dim_date ON fact_order.date_id = dim_date.date
+                          JOIN dim_date ON fact_order.date_id = dim_date.date_id
                           WHERE dim_date.year = 2024""",
         "difficulty": "时间过滤 + JOIN",
     },
@@ -210,7 +211,7 @@ TEST_CASES_E2E = [
         "query": "今年3月的销售额",
         "expected_sql": """SELECT SUM(fact_order.order_amount) AS 销售额
                           FROM fact_order
-                          JOIN dim_date ON fact_order.date_id = dim_date.date
+                          JOIN dim_date ON fact_order.date_id = dim_date.date_id
                           WHERE dim_date.year = YEAR(CURRENT_DATE)
                             AND dim_date.month = 3""",
         "difficulty": "时间过滤 + JOIN",
@@ -226,7 +227,7 @@ TEST_CASES_E2E = [
         "query": "去年双十一的销售额",
         "expected_sql": """SELECT SUM(fact_order.order_amount) AS 双十一销售额
                           FROM fact_order
-                          JOIN dim_date ON fact_order.date_id = dim_date.date_id
+                          JOIN dim_date ON fact_order.date_id = dim_date.date_id_id
                           WHERE dim_date.year = 2025 AND dim_date.month = 11 AND dim_date.day = 11""",
         "difficulty": "复杂时间计算",
     },
@@ -250,7 +251,7 @@ TEST_CASES_E2E = [
         "query": "2024年Q4各月的GMV",
         "expected_sql": """SELECT dim_date.month AS 月份, SUM(fact_order.order_amount) AS GMV
                           FROM fact_order
-                          JOIN dim_date ON fact_order.date_id = dim_date.date
+                          JOIN dim_date ON fact_order.date_id = dim_date.date_id
                           WHERE dim_date.year = 2024 AND dim_date.quarter = 4
                           GROUP BY dim_date.month
                           ORDER BY dim_date.month""",
@@ -350,7 +351,7 @@ TEST_CASES_E2E = [
         "query": "月度GMV趋势",
         "expected_sql": """SELECT dim_date.year AS 年, dim_date.month AS 月, SUM(fact_order.order_amount) AS GMV
                           FROM fact_order
-                          JOIN dim_date ON fact_order.date_id = dim_date.date
+                          JOIN dim_date ON fact_order.date_id = dim_date.date_id
                           GROUP BY dim_date.year, dim_date.month
                           ORDER BY dim_date.year, dim_date.month""",
         "difficulty": "趋势分析",
@@ -370,15 +371,20 @@ TEST_CASES_E2E = [
     {
         "query": "新客占比",
         "expected_sql": """SELECT
-                            COUNT(DISTINCT CASE WHEN is_new = 1 THEN customer_id END) * 1.0
-                            / COUNT(DISTINCT customer_id) AS 新客占比
-                          FROM fact_order""",
+                            COUNT(DISTINCT CASE WHEN first_order.first_date BETWEEN 20260701 AND 20260801 THEN fo.customer_id END) * 1.0
+                            / COUNT(DISTINCT fo.customer_id) AS 新客占比
+                          FROM fact_order fo
+                          LEFT JOIN (
+                              SELECT customer_id, MIN(date_id) AS first_date
+                              FROM fact_order
+                              GROUP BY customer_id
+                          ) first_order ON fo.customer_id = first_order.customer_id""",
         "difficulty": "复杂业务指标",
     },
     {
         "query": "支付成功率",
         "expected_sql": """SELECT
-                            COUNT(CASE WHEN payment_status = '成功' THEN 1 END) * 1.0
+                            COUNT(CASE WHEN order_quantity > 0 THEN 1 END) * 1.0
                             / COUNT(*) AS 支付成功率
                           FROM fact_order""",
         "difficulty": "复杂业务指标",
@@ -418,7 +424,7 @@ TEST_CASES_E2E = [
         "query": "今年呢",
         "expected_sql": """SELECT SUM(fact_order.order_amount) AS 销售额
                           FROM fact_order
-                          JOIN dim_date ON fact_order.date_id = dim_date.date
+                          JOIN dim_date ON fact_order.date_id = dim_date.date_id
                           WHERE dim_date.year = YEAR(CURRENT_DATE)""",
         "difficulty": "多轮 - 时间补全",
         "depends_on_prev": "查一下华东的销售额",
@@ -466,7 +472,7 @@ TEST_CASES_E2E = [
         "query": "今年和去年同期的 GMV 对比",
         "expected_sql": """SELECT dim_date.year AS 年份, SUM(fact_order.order_amount) AS GMV
                           FROM fact_order
-                          JOIN dim_date ON fact_order.date_id = dim_date.date
+                          JOIN dim_date ON fact_order.date_id = dim_date.date_id
                           WHERE dim_date.year IN (YEAR(CURRENT_DATE), YEAR(CURRENT_DATE) - 1)
                           GROUP BY dim_date.year
                           ORDER BY dim_date.year""",

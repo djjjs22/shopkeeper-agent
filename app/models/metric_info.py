@@ -26,3 +26,6 @@ class MetricInfoMySQL(Base):
         JSON, comment="关联字段"
     )
     alias: Mapped[dict | list | None] = mapped_column(JSON, comment="指标别名")
+    # 2026-09-16 加固：复杂业务指标的 SQL 模板（占位符 <date>/<value>/<number>）
+    # 留空 = 没模板，LLM 自己写 SQL；有模板 = render 后直接套用
+    sql_template: Mapped[str | None] = mapped_column(Text, comment="复杂指标的SQL模板")

@@ -43,12 +43,16 @@ class MySQLClientManager:
         # 2026-07-20 优化：增加 max_overflow（突发并发）+ pool_timeout（fail fast）
         # 原 pool_size=10 无 overflow，11 并发请求会卡 pool checkout 30s，
         # 改后允许瞬时到 30 个连接，10s 拿不到连接快速暴露失败
+        # 2026-09-15 评测发现: 50+ sub_query 并发跑评测时 11+ sub 抢占连接卡 30s
+        # 改: pool_size 10→20, max_overflow 20→40（峰值 60 个连接, 远超 MySQL 默认 151 上限的 1/2）
+        # 配套: pool_recycle=1800 避免 MySQL wait_timeout 静默关闭连接
         self.engine = create_async_engine(
             self._get_url(),
-            pool_size=10,
-            max_overflow=20,
-            pool_timeout=10,
+            pool_size=20,
+            max_overflow=40,
+            pool_timeout=15,
             pool_pre_ping=True,
+            pool_recycle=1800,
         )
         # 基于 Engine 创建 Session 工厂，后面真正查库时再拿 session
         self.session_factory = async_sessionmaker(

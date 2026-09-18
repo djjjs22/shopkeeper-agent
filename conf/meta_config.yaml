@@ -168,9 +168,83 @@ metrics:
     description: 全称Gross Merchandise Value，表示所有订单的成交金额总和。
     relevant_columns:
       - fact_order.order_amount
-    alias: [成交总额, 订单总额]
+    alias: [成交总额, 订单总额, 营业额, GMV]
+    # SQL 模板：通用版（无时间窗）
+    # 时间窗参数：<date_start>/<date_end> 由 time_range 替换
+    # 关键：用了业务指标就别让 LLM 重新定义 SUM(fo.order_amount)
+    sql_template: |
+      SELECT
+        SUM(fo.order_amount) AS GMV
+      FROM fact_order fo
+      WHERE 1=1
   - name: AOV
-    description: 全称Average Order Value，表示所有订单的成交金额平均值。
+    description: 全称Average Order Value，表示所有订单的成交金额平均值（客单价）。
     relevant_columns:
       - fact_order.order_amount
-    alias: [平均单价, 平均订单金额]
+    alias: [平均单价, 平均订单金额, 客单价, AOV]
+    sql_template: |
+      SELECT
+        AVG(fo.order_amount) AS AOV
+      FROM fact_order fo
+      WHERE 1=1
+  # 2026-09-16 加固：补 4 个复杂业务指标，对应 eval_e2e_data.py 场景 5/6/7 反复失败的 case
+  - name: 复购率
+    description: 复购率 = 多次下单客户数 / 总客户数。多次定义为订单数 >= 2。
+    relevant_columns:
+      - fact_order.customer_id
+      - fact_order.order_id
+    alias: [回购率, 复购比例]
+    # SQL 模板：通用版（无时间窗）
+    # 占位符说明：<> 标记需要 LLM 用 render 替换；where_<> 块可被业务时间条件覆盖
+    sql_template: |
+      SELECT
+        COUNT(DISTINCT CASE WHEN t.order_count > 1 THEN t.customer_id END) * 1.0
+        / COUNT(DISTINCT t.customer_id) AS 复购率
+      FROM (
+        SELECT customer_id, COUNT(*) AS order_count
+        FROM fact_order
+        GROUP BY customer_id
+      ) t
+  - name: 动销率
+    description: 动销率 = 有销量的商品数 / 总商品数。销量 > 0 算动销。
+    relevant_columns:
+      - fact_order.product_id
+      - fact_order.order_quantity
+      - dim_product.product_id
+    alias: [商品动销率, 动销比]
+    sql_template: |
+      SELECT
+        COUNT(DISTINCT CASE WHEN fo.order_quantity > 0 THEN fo.product_id END) * 1.0
+        / (SELECT COUNT(DISTINCT product_id) FROM dim_product) AS 动销率
+      FROM fact_order fo
+  - name: 新客占比
+    description: 新客占比 = 首次下单在指定时间窗内的客户数 / 总下单客户数。
+    relevant_columns:
+      - fact_order.customer_id
+      - fact_order.date_id
+    alias: [新客比例, 新用户占比]
+    # 时间窗参数：<date_start>/<date_end> 由 LLM 用用户 query 中的时间范围替换
+    sql_template: |
+      SELECT
+        COUNT(DISTINCT CASE
+          WHEN first_order.first_date BETWEEN <date_start> AND <date_end>
+          THEN fo.customer_id
+        END) * 1.0
+        / COUNT(DISTINCT fo.customer_id) AS 新客占比
+      FROM fact_order fo
+      LEFT JOIN (
+        SELECT customer_id, MIN(date_id) AS first_date
+        FROM fact_order
+        GROUP BY customer_id
+      ) first_order ON fo.customer_id = first_order.customer_id
+  - name: 支付成功率
+    description: 支付成功率 = 有销量的订单数 / 总订单数。销量 > 0 算支付成功。
+    relevant_columns:
+      - fact_order.order_id
+      - fact_order.order_quantity
+    alias: [付款成功率, 支付转化率]
+    sql_template: |
+      SELECT
+        COUNT(CASE WHEN order_quantity > 0 THEN 1 END) * 1.0
+        / COUNT(*) AS 支付成功率
+      FROM fact_order

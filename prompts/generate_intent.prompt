@@ -19,6 +19,28 @@
 3. JSON 里的"值"只能是：列名、聚合表达式（如 SUM/COUNT/AVG 的具体形式）、表别名（如 fo、dr、dd）、运算符、字符串字面量。**不要写"SELECT"或"WHERE"这种关键字**。
 4. 如果信息不足或不确定，**输出空列表**而不是猜测。例如不确定 group_by 时，group_by 为空数组 []，而不是猜一个字段。
 5. 如果【可参考的指标信息】里有相关指标定义，必须用指标定义里"relevance_columns"指定的字段名，不要自己造。
+6. ⛔ 字段名 100% 必须从【可用数据表信息】里**实际存在**的列里选（2026-09-16 加固）
+   - 不允许幻觉字段（如 `is_new` / `payment_status` / `order_date` / `full_date` / `register_date` / `dc.region_id`）
+   - 实际字段名以 schema 标注为准：`fo.date_id` / `fo.order_amount` / `fo.order_quantity` / `fo.customer_id` / `fo.product_id` / `fo.region_id` / `fo.payment_method` / `dc.member_level` / `dr.region_name` / `dp.category` / `dd.year/quarter/month/day`
+   - 写错字段名 = SQL 必然报错 = 整个 SQL 失败
+
+【枚举/去重规则】（2026-09-16 加固）
+- 用户问"列出所有的 XX"/"有哪些 XX"/"XX 都有哪些" → 必须在 select 里加 `DISTINCT`(去重)
+- 示例:
+  - "列出所有的地区" → `{"expr": "DISTINCT dr.region_name", "alias": "地区"}`
+  - "有哪些支付方式" → `{"expr": "DISTINCT fo.payment_method", "alias": "支付方式"}`
+  - "商品都有哪些品类" → `{"expr": "DISTINCT dp.category", "alias": "品类"}`
+- 没加 DISTINCT = 返回全表 = 错
+
+【时间字段的硬规则】（2026-09-16 加固）
+⛔ 本项目的时间字段是 `date_id`（INTEGER，格式 yyyyMMdd，如 20260601），**不是** `order_date` 也不是 `full_date`。
+⛔ 时间过滤必须用**整数比较**：`date_id >= 20260101 AND date_id < 20260401`（左闭右开，跨月/跨年安全）。
+⛔ 禁止用 `BETWEEN '2025-12-01' AND '2025-12-31'` 字符串形式（项目里 `date_id` 是整数，字符串会被隐式转整数，但 BETWEEN 含端点 = 错）。
+⛔ 禁止引用 `YEAR(dd.full_date) / QUARTER(dd.full_date)` 这种对"日期类型字段"做的函数（dim_date 里没有 full_date 字段，dim_date 只有 year/quarter/month/day 整数字段，可直接用 `dd.year = 2025 AND dd.quarter = 1`）。
+✅ 正确示例：
+   - 单月："fo.date_id >= 20260601 AND fo.date_id < 20260701"
+   - 跨年："fo.date_id >= 20260101 AND fo.date_id < 20270101"
+   - 年维度（join dim_date）："dd.year = 2025 AND dd.quarter = 1"
 
 【JSON 结构示例】
 {
@@ -28,11 +50,11 @@
   "from": "fact_order fo",
   "joins": [
     {"type": "INNER", "table": "dim_region dr", "on": "fo.region_id = dr.region_id"},
-    {"type": "INNER", "table": "dim_date dd", "on": "fo.order_date = dd.full_date"}
+    {"type": "INNER", "table": "dim_date dd", "on": "fo.date_id = dd.date_id"}
   ],
   "where": [
     "dr.region_name = '华北'",
-    "fo.order_date BETWEEN '2025-12-01' AND '2025-12-31'"
+    "fo.date_id >= 20251201 AND fo.date_id < 20260101"
   ],
   "group_by": [],
   "order_by": [],
@@ -64,7 +86,9 @@
 查询改写结果（结构化时间范围）：
 {{ time_range }}
 - 如果是"无"：不要在 where 里加时间条件
-- 如果有具体起止日期：必须在 where 里加 `BETWEEN '开始' AND '结束'` 形式
+- 如果有具体起止日期：在 where 里加整数 date_id 比较（`fo.date_id >= yyyyMMdd AND fo.date_id < yyyyMMdd`，左闭右开）
+- ⛔ 严禁**重复**加时间过滤：如果本节给了 time_range 就在 where 里用上面那种 date_id 区间写法；**不要同时**再加 `dd.year = 2025 AND dd.quarter = 1` 或 `YEAR/MONTH(dd.full_date)` 这种第二套条件（2026-09-18 修复：重复叠加是 Q4 0 行的根因）
+- 也不要再用 BETWEEN / > / < 直接对日期字面量比较（date_id 是整数，左闭右开是唯一正确写法）
 
 从历史继承的上下文：
 {{ inherited_context }}
@@ -105,7 +129,7 @@ JSON：
   ],
   "where": [
     "dr.region_name = '华北'",
-    "fo.order_date BETWEEN '2025-12-01' AND '2025-12-31'"
+    "fo.date_id >= 20251201 AND fo.date_id < 20260101"
   ],
   "group_by": [],
   "order_by": [],
@@ -143,13 +167,13 @@ JSON：
   "joins": [
     {"type": "INNER", "table": "dim_region dr", "on": "fo.region_id = dr.region_id"},
     {"type": "INNER", "table": "dim_customer dc", "on": "fo.customer_id = dc.customer_id"},
-    {"type": "INNER", "table": "dim_date dd", "on": "fo.order_date = dd.full_date"}
+    {"type": "INNER", "table": "dim_date dd", "on": "fo.date_id = dd.date_id"}
   ],
   "where": [
     "dr.region_name = '华南'",
     "dc.member_level = '黄金'",
-    "YEAR(dd.full_date) = 2025",
-    "QUARTER(dd.full_date) = 1"
+    "dd.year = 2025",
+    "dd.quarter = 1"
   ],
   "group_by": [],
   "order_by": [],
@@ -195,9 +219,66 @@ JSON：
   "limit": null
 }
 
+【示例 6：窗口函数 ROW_NUMBER】（2026-09-16 加固）
+用户查询：每个地区销售额最高的客户
+查询改写结果：无
+从历史继承的上下文：无
+JSON：
+{
+  "select": [
+    {"expr": "t.region_name", "alias": "地区"},
+    {"expr": "t.customer_id", "alias": "客户ID"},
+    {"expr": "t.order_amount", "alias": "销售额"}
+  ],
+  "from": "(SELECT dr.region_name, fo.customer_id, SUM(fo.order_amount) AS order_amount, ROW_NUMBER() OVER (PARTITION BY dr.region_name ORDER BY SUM(fo.order_amount) DESC) AS rn FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id GROUP BY dr.region_name, fo.customer_id) t",
+  "joins": [],
+  "where": ["t.rn = 1"],
+  "group_by": [],
+  "order_by": [],
+  "limit": null
+}
+（技巧：ROW_NUMBER 必须包在子查询里,where rn=1 取出每个分区第一名;把子查询整个放 from 字段,用 t 别名）
+
+【示例 7：UNION ALL 合并】（2026-09-16 加固）
+用户查询：黄金会员和普通会员的销售额合计
+查询改写结果：无
+从历史继承的上下文：无
+JSON：
+{
+  "select": [
+    {"expr": "'黄金' AS 会员类型"},
+    {"expr": "SUM(order_amount)", "alias": "销售额"}
+  ],
+  "from": "fact_order fo",
+  "joins": [
+    {"type": "INNER", "table": "dim_customer dc", "on": "fo.customer_id = dc.customer_id"}
+  ],
+  "where": ["dc.member_level = '黄金'"],
+  "group_by": [],
+  "order_by": [],
+  "limit": null,
+  "_union_all": [
+    {
+      "select": [
+        {"expr": "'普通' AS 会员类型"},
+        {"expr": "SUM(order_amount)", "alias": "销售额"}
+      ],
+      "from": "fact_order fo",
+      "joins": [{"type": "INNER", "table": "dim_customer dc", "on": "fo.customer_id = dc.customer_id"}],
+      "where": ["dc.member_level = '普通'"],
+      "group_by": [],
+      "order_by": [],
+      "limit": null
+    }
+  ]
+}
+（技巧：UNION ALL 用 _union_all 数组扩展,每个分支是独立的 select 块;render 时拼成 SELECT ... UNION ALL SELECT ...）
+
 【安全约束】
 - 只输出 JSON，不输出任何 SQL 关键字
-- select/where 里禁止使用 UNION / DROP / DELETE 等危险模式
+- 禁止使用 DROP / DELETE / TRUNCATE 等危险模式
+- ✅ 允许 UNION ALL(用于多组合并,如"黄金+普通会员分别求和")
+- ❌ 禁止 UNION(无 ALL,会去重,本项目业务不需要)
 - 字段名必须来自【可用数据表信息】里实际存在的字段，不要编造
 
 用户查询如下：

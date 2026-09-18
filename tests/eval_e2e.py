@@ -50,6 +50,142 @@ meta_mysql_client_manager.init()
 dw_mysql_client_manager.init()
 
 
+def _render_expected(case: dict, today) -> str:
+    """2026-09-16 加固:根据 today 动态重算 expected_sql 里的 date_id
+
+    原始 case.expected_sql 写死 2026XXXX,但今天是 9-15 之后,
+    "上个月"/"最近7天"对应的 date_id 已经过期。
+    改后:根据 query 关键词识别时间意图,根据 today 算具体 date_id 范围,替换 sql 里的硬编码。
+
+    覆盖的查询意图:
+    - "上个月"        → 上月 1 号 ~ 上月最后一天
+    - "最近 7 天"     → today-6 ~ today
+    - "上周"          → 上周一 ~ 上周日
+    - "本月"          → 本月 1 号 ~ today
+    - "过去 30 天"    → today-29 ~ today
+    - "去年"          → 上年 1-1 ~ 上年 12-31
+    - "今年"          → 今年 1-1 ~ today
+    - "去年同一时期"  → 上年同月
+    - "去年同期"      → 上年同月
+
+    设计:用正则替换 case.expected_sql 里的 YYYYMMDD 数字(只动时间数字,不动其他)
+    """
+    import re
+    from datetime import timedelta
+
+    sql = case.get("expected_sql", "")
+    if not sql:
+        return sql
+
+    query = case.get("query", "")
+
+    # 按 query 关键词识别时间意图,算目标范围
+    target = None  # (start_yyyymmdd, end_yyyymmdd)
+    ymd = today.strftime("%Y%m%d")
+
+    # 2026-09-16 加固:先匹配复合查询(增长率/同比),再匹配简单时间词
+    if "增长率" in query or ("增长" in query and "相比" in query):
+        # 增长率:本月 vs 上月
+        this_month_start = today.replace(day=1)
+        this_month_end = today
+        if today.month == 1:
+            last_month_start = today.replace(year=today.year - 1, month=12, day=1)
+            last_month_end = today.replace(year=today.year - 1, month=12, day=31)
+        else:
+            last_month_start = today.replace(month=today.month - 1, day=1)
+            last_month_end = this_month_start - timedelta(days=1)
+        target = (
+            last_month_start.strftime("%Y%m%d"),
+            last_month_end.strftime("%Y%m%d"),
+            this_month_start.strftime("%Y%m%d"),
+            ymd,
+        )
+    elif "同期" in query:  # 同期 = 同比
+        last_year_today = today.replace(year=today.year - 1)
+        target = (last_year_today.replace(month=1, day=1).strftime("%Y%m%d"),
+                  last_year_today.strftime("%Y%m%d"))
+    elif "上个月" in query or "上月" in query:
+        # 上月 1 号 ~ 上月最后一天
+        if today.month == 1:
+            last_month_start = today.replace(year=today.year - 1, month=12, day=1)
+        else:
+            last_month_start = today.replace(month=today.month - 1, day=1)
+        # 上月最后一天 = 本月 1 号 - 1 天
+        this_month_start = today.replace(day=1)
+        last_month_end = this_month_start - timedelta(days=1)
+        target = (last_month_start.strftime("%Y%m%d"),
+                  last_month_end.strftime("%Y%m%d"))
+    elif "最近" in query and "天" in query:
+        m = re.search(r"最近\s*(\d+)\s*天", query)
+        n = int(m.group(1)) if m else 7
+        start_d = today - timedelta(days=n - 1)
+        target = (start_d.strftime("%Y%m%d"), ymd)
+    elif "上周" in query:
+        # 上周一 ~ 上周日
+        weekday = today.weekday()  # 0=Mon
+        this_monday = today - timedelta(days=weekday)
+        last_monday = this_monday - timedelta(days=7)
+        last_sunday = this_monday - timedelta(days=1)
+        target = (last_monday.strftime("%Y%m%d"), last_sunday.strftime("%Y%m%d"))
+    elif "本月" in query or "这个月" in query:
+        this_month_start = today.replace(day=1)
+        target = (this_month_start.strftime("%Y%m%d"), ymd)
+    elif "过去" in query and "天" in query:
+        m = re.search(r"过去\s*(\d+)\s*天", query)
+        n = int(m.group(1)) if m else 30
+        start_d = today - timedelta(days=n - 1)
+        target = (start_d.strftime("%Y%m%d"), ymd)
+    elif "去年" in query or "上年" in query:
+        last_year_start = today.replace(year=today.year - 1, month=1, day=1)
+        last_year_end = today.replace(year=today.year - 1, month=12, day=31)
+        target = (last_year_start.strftime("%Y%m%d"),
+                  last_year_end.strftime("%Y%m%d"))
+    elif "今年" in query:
+        this_year_start = today.replace(month=1, day=1)
+        target = (this_year_start.strftime("%Y%m%d"), ymd)
+    elif "去年同期" in query or "去年同一时期" in query:
+        # 同比:今年 1 月 ~ today 对应去年同月
+        last_year_today = today.replace(year=today.year - 1)
+        last_year_jan = last_year_today.replace(month=1, day=1)
+        target = (last_year_jan.strftime("%Y%m%d"),
+                  last_year_today.strftime("%Y%m%d"))
+
+    if not target:
+        return sql  # 没识别出时间意图,保持原样
+
+    # 替换:找到所有 8 位日期数字,按出现顺序配对 [start, end]
+    date_nums = re.findall(r"\b(20\d{6})\b", sql)
+    if not date_nums:
+        return sql
+
+    new_sql = sql
+    # 2026-09-16:target 已经是 2-tuple 或 4-tuple(根据上面分支)
+    # 直接按 date_nums 数量取前 n 个
+    if len(target) == 4:
+        # 增长率:[上月start, 上月end, 本月start, 本月end]
+        new_dates = list(target)
+    elif len(target) == 2:
+        if len(date_nums) == 2:
+            new_dates = [target[0], target[1]]
+        elif len(date_nums) == 1:
+            new_dates = [target[0]]
+        else:
+            # 3 个或更多:第 1 个 start,其他都 end(罕见)
+            new_dates = [target[0]] + [target[1]] * (len(date_nums) - 1)
+    else:
+        # 3 个或更多:第 1 个 start,其他都 end(罕见)
+        new_dates = [target[0]] + [target[1]] * (len(date_nums) - 1)
+
+    # 逐个替换(只替换前 len(new_dates) 个,后面的保留原样)
+    pos = 0
+    result = []
+    for i, ch in enumerate(sql):
+        result.append(ch)
+    for old, new in zip(date_nums, new_dates):
+        new_sql = new_sql.replace(old, new, 1)
+    return new_sql
+
+
 async def _run_one_path(graph, query, history, session_id, expected_sql, context_factory):
     """跑单条路径（single 或 multi），返回 (generated_sql, execution_match, elapsed_ms, error)
 
@@ -59,8 +195,15 @@ async def _run_one_path(graph, query, history, session_id, expected_sql, context
     start = time.time()
     try:
         context = await context_factory()
+        # 2026-09-16 加固：eval 可以用 EVAL_TODAY 注入"模拟今天"，
+        # 让 expected SQL 写死的日期范围跟运行时日期对齐（默认 = 真实今天）
+        eval_today = os.environ.get("EVAL_TODAY")
+        input_state = {"query": query, "history": history, "session_id": session_id}
+        if eval_today:
+            input_state["eval_today"] = eval_today
+
         result = await graph.ainvoke(
-            input={"query": query, "history": history, "session_id": session_id},
+            input=input_state,
             context=context,
         )
         elapsed_ms = (time.time() - start) * 1000
@@ -106,13 +249,27 @@ async def run_one_case(graph, case: dict, use_multi_agent: bool = False) -> dict
     - passed = execution_match is True（唯一标准，不再有 0.8 阈值兜底）
     """
     query = case["query"]
-    expected_sql = case["expected_sql"]
+    # 2026-09-16 加固：expected_sql 改动态生成(EVAL_TODAY env 决定 today)
+    # 原来 case 里写死 20260601 / 20260701 这种,今天 9-15 跑全过不了
+    # 改后:case["expected_sql"] 仍保留(给 ground_truth_result 对照),
+    #       实际跑用 _render_expected(case, today) 动态算
+    import os as _os  # 2026-09-16 加固:函数内 import 避免污染模块作用域
+    eval_today_str = _os.environ.get("EVAL_TODAY")
+    if eval_today_str:
+        from datetime import datetime as _dt
+        today = _dt.strptime(eval_today_str, "%Y-%m-%d").date()
+    else:
+        from datetime import date as _date
+        today = _date.today()
+    expected_sql = _render_expected(case, today)
     difficulty = case.get("difficulty", "未知")
 
     # 多轮 case 处理：把历史喂进去
+    # 2026-09-16 加固：把完整 multi_turn 传给 graph(state["history"])
+    # rewrite_query 节点自己负责截尾给"时间标准化"用,
+    # 但 _extract_inherited_context 需要完整 history 才能识别"那"=刚才那个查询
+    # 之前 history[:-1] 截掉了 user 当前 query,导致 inherited 识别失败
     history = case.get("multi_turn", [])
-    if history:
-        history = history[:-1]
 
     session_id = f"eval-{case.get('id', 'unknown')}-{'multi' if use_multi_agent else 'single'}"
 

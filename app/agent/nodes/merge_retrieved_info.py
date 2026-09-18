@@ -154,12 +154,14 @@ async def merge_retrieved_info(
 
         # 7. 生成指标上下文
         # 指标上下文保留名称 描述 别名和依赖字段，足够让模型理解业务口径。
+        # 2026-09-16 加固：把 sql_template 也带进 state（generate_intent 用它做"快路径"）
         metric_infos: list[MetricInfoState] = [
             MetricInfoState(
                 name=retrieved_metric_info.name,
                 description=retrieved_metric_info.description,
                 relevant_columns=retrieved_metric_info.relevant_columns,
                 alias=retrieved_metric_info.alias,
+                sql_template=retrieved_metric_info.sql_template,
             )
             for retrieved_metric_info in retrieved_metric_infos
         ]

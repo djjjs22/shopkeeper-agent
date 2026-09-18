@@ -23,6 +23,8 @@ class MetricInfoMapper:
             description=model.description,
             relevant_columns=model.relevant_columns,
             alias=model.alias,
+            # 2026-09-16 加固：读 sql_template
+            sql_template=getattr(model, "sql_template", None),
         )
 
     @staticmethod

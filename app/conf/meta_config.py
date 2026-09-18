@@ -42,12 +42,20 @@ class MetricConfig:
     """
     单个指标的同步配置
     用来描述指标和底层字段之间的关联关系
+
+    2026-09-16 加固：加 sql_template 字段
+    - 可选：复杂业务指标（如复购率/动销率）给 LLM 一个 SQL 模板
+    - 模板用占位符：<region_value>/<date>/<number>
+    - 生成时直接用 template 渲染，LLM 不再自己写复杂 SQL
+    - 模板里如果有 SELECT/SUM 等关键字，必须整个 expr 嵌进 SELECT 列表（render_sql 支持）
     """
 
     name: str
     description: str
     relevant_columns: list[str]
     alias: list[str]
+    # 复杂指标的 SQL 模板（占位符替换具体值后可直接拼到 SELECT/FROM/WHERE）
+    sql_template: Optional[str] = None
 
 
 @dataclass

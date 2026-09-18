@@ -56,6 +56,17 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
         # 1. 读取 intent（必须字段，没有就空 dict → 渲染出 SELECT 1 兜底）
         intent = state.get("query_intent", {})
 
+        # 2026-09-16 快路径：generate_intent 命中复杂指标模板时，把渲染好的 SQL
+        # 塞进 intent._fast_path_sql。本节点优先读，绕过 render_sql 走原路。
+        if intent and intent.get("_fast_path_sql"):
+            sql = intent["_fast_path_sql"]
+            logger.info(
+                f"生成的SQL（快路径，绕过 render_sql）: {sql[:200]}"
+                f"{'...' if len(sql) > 200 else ''}"
+            )
+            writer({"type": "progress", "step": step, "status": "success"})
+            return {"sql": sql}
+
         # 2. 渲染 SQL（确定性代码，不调 LLM）
         sql = render_sql(intent)
 
