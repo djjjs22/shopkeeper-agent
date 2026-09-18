@@ -2,11 +2,7 @@
 
 ## 🎬 演示视频
 
-<iframe src="//player.bilibili.com/player.html?bvid=BV1uDe16vEeG&autoplay=0&high_quality=1"
-        width="100%" height="540" scrolling="no" frameborder="0"
-        allowfullscreen></iframe>
-
-> 想本地看视频?[点此下载 demo.mp4（17 MB, 1分54秒）](https://github.com/djjjs22/shopkeeper-agent/raw/a270873/docs/demo.mp4)（从 git 历史 `a270873` 取,本分支已删除避免仓库臃肿）
+https://www.bilibili.com/video/BV1uDe16vEeG/
 
 > 用户说"统计 2025 年第一季度各大区的 GMV" → 系统自动检索表结构、生成 SQL、安全校验、执行 → 返回结构化结果。
 >
