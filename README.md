@@ -4,7 +4,7 @@
 
 <video src="https://raw.githubusercontent.com/djjjs22/shopkeeper-agent/main/docs/demo.mp4" controls width="100%"></video>
 
-> 如果播放器无法加载（GitHub 对 >20MB 视频有时限制），[点击下载 demo.mp4（42 MB）](./docs/demo.mp4)本地观看。
+> 如果播放器无法加载，[点击下载 demo.mp4（17 MB）](./docs/demo.mp4)本地观看。
 
 > 用户说"统计 2025 年第一季度各大区的 GMV" → 系统自动检索表结构、生成 SQL、安全校验、执行 → 返回结构化结果。
 >
